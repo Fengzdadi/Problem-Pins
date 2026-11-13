@@ -4,6 +4,7 @@ import { Circle, CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap,
 import { STATUSES } from '../data/meta';
 import { NEIGHBORHOOD_CENTER, YOU_ARE_HERE } from '../data/geo';
 import type { Issue } from '../data/types';
+import markerSvg from '../../brand/map-marker.svg?raw';
 
 interface LatLng {
   lat: number;
@@ -31,7 +32,7 @@ const pinIcon = L.divIcon({
   className: '',
   iconSize: [28, 36],
   iconAnchor: [14, 34],
-  html: `<svg width="28" height="36" viewBox="0 0 24 30" fill="none"><path d="M12 29s9-8.4 9-16a9 9 0 1 0-18 0c0 7.6 9 16 9 16Z" fill="#ef5a1f" stroke="white" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="white"/></svg>`,
+  html: markerSvg,
 });
 
 function radiusFor(issue: Issue, sizeByVotes: boolean) {
@@ -159,7 +160,7 @@ export default function IssueMap({
         />
       )}
 
-      {pick && <Marker position={[pick.lat, pick.lng]} icon={pinIcon} />}
+      {pick && <Marker key={`${pick.lat},${pick.lng}`} position={[pick.lat, pick.lng]} icon={pinIcon} />}
     </MapContainer>
   );
 }

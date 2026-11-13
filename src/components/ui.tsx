@@ -1,4 +1,5 @@
-import { Accessibility, Armchair, CircleHelp, Lightbulb, MapPin, Trash2, Volume2, type LucideIcon } from 'lucide-react';
+import { Accessibility, Armchair, CircleHelp, Lightbulb, Trash2, Volume2, type LucideIcon } from 'lucide-react';
+import markUrl from '../../brand/mark.svg';
 import { CATEGORIES, STATUSES } from '../data/meta';
 import type { Category, Issue, Status } from '../data/types';
 import { useStore } from '../store';
@@ -13,12 +14,9 @@ export const CATEGORY_ICONS: Record<Category, LucideIcon> = {
 };
 
 export function Logo({ dark = false, size = 'md' }: { dark?: boolean; size?: 'sm' | 'md' }) {
-  const box = size === 'sm' ? 'h-6 w-6' : 'h-7 w-7';
   return (
     <div className="flex items-center gap-2.5">
-      <div className={`${box} grid place-items-center rounded-md bg-brand`}>
-        <MapPin className="h-4 w-4 text-white" strokeWidth={2.4} />
-      </div>
+      <img src={markUrl} alt="" className={size === 'sm' ? 'h-6' : 'h-7'} />
       <span className={`font-semibold ${dark ? 'text-white' : 'text-ink'}`}>Problem Pins</span>
     </div>
   );
