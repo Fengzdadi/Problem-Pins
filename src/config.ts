@@ -29,10 +29,15 @@ export const config = {
   districtId: env.VITE_DISTRICT_ID ?? '',
   /** Base URL printed on QR posters and used for short links (`<publicUrl>/q/Q-12`). */
   publicUrl: (env.VITE_PUBLIC_URL || (typeof window === 'undefined' ? '' : window.location.origin)).replace(/\/$/, ''),
+  /**
+   * Raster tiles, shown in grayscale by CSS. The default (Stadia Maps "Alidade Smooth") needs no key on
+   * localhost only; deployments must set their own provider. See docs/MAP_TILES.md.
+   */
   mapTiles: {
-    url: env.VITE_MAP_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    url: env.VITE_MAP_TILE_URL || 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png',
     attribution:
-      env.VITE_MAP_ATTRIBUTION || '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      env.VITE_MAP_ATTRIBUTION ||
+      '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   },
 };
 

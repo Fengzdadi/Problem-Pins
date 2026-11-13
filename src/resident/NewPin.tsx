@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, ChevronUp, X } from 'lucide-react';
+import { Camera, ChevronUp, Search, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { isDemo } from '../config';
 import { CATEGORIES } from '../data/meta';
-import { YOU_ARE_HERE, describeLocation, distanceMeters } from '../data/geo';
+import { distanceMeters } from '../data/geo';
 import type { Category } from '../data/types';
 import { formatMeters } from '../lib/format';
+import { labelFor } from '../lib/geocode';
+import { insideDistrict, type Point } from '../lib/geometry';
+import { useAddressSearch, usePlaceLabel } from '../lib/useGeocode';
+import { useUserLocation } from '../lib/userLocation';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
@@ -40,7 +44,8 @@ export default function NewPin({ category: initialCategory, from }: { category: 
   const store = useStore();
   const { district, track } = store;
   const scan = from ? store.scanPoints.find((p) => p.code === from) : undefined;
-  const start = scan ? { lat: scan.lat, lng: scan.lng } : YOU_ARE_HERE;
+  // From a QR poster the pin starts at the poster; otherwise at the resident's position.
+  const loc = useUserLocation({ ask: !scan });
 
   useEffect(() => {
     track({ name: 'pin_start', scanCode: scan?.code, props: { via: scan ? 'qr' : 'map' } });
@@ -49,17 +54,36 @@ export default function NewPin({ category: initialCategory, from }: { category: 
   const [category, setCategory] = useState<Category | null>(
     initialCategory && initialCategory in CATEGORIES ? (initialCategory as Category) : null,
   );
-  const [pos, setPos] = useState(start);
-  const [moved, setMoved] = useState(false);
+  // `label` is set for a searched address: the resident chose it by name, so keep that name.
+  const [picked, setPicked] = useState<{ point: Point; how: 'map' | 'search'; label?: string } | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [posting, setPosting] = useState(false);
   const [dismissedSimilar, setDismissedSimilar] = useState<string[]>([]);
+  const [query, setQuery] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
+  // Where the pin is: what the resident picked, else the QR poster, else their position if it's
+  // inside the district. Outside the district or without a position there is no pin until they
+  // tap the map or search, so nothing gets posted at a made-up spot.
+  const device = loc.position;
+  const deviceInside = device ? insideDistrict(device, district) : false;
+  const origin: 'picked' | 'scan' | 'device' | 'none' = picked ? 'picked' : scan ? 'scan' : device && deviceInside ? 'device' : 'none';
+  const pos = useMemo<Point | null>(() => {
+    if (picked) return picked.point;
+    if (scan) return { lat: scan.lat, lng: scan.lng };
+    if (device && deviceInside) return { lat: device.lat, lng: device.lng };
+    return null;
+  }, [picked, scan, device, deviceInside]);
+  const outside = pos ? !insideDistrict(pos, district) : false;
+
+  const searchLabel = picked?.label;
+  const { place, loading: lookingUp, fallback } = usePlaceLabel(searchLabel ? null : pos);
+  const addresses = useAddressSearch(query, district.center);
+
   const similar = useMemo(() => {
-    if (!category) return undefined;
+    if (!category || !pos) return undefined;
     return store.issues
       .filter((i) => i.status !== 'fixed' && i.category === category && !dismissedSimilar.includes(i.id))
       .map((i) => ({ issue: i, d: distanceMeters(pos, i) }))
@@ -67,12 +91,42 @@ export default function NewPin({ category: initialCategory, from }: { category: 
       .sort((a, b) => a.d - b.d)[0];
   }, [category, pos, store.issues, dismissedSimilar]);
 
-  const canPost = category && title.trim().length > 2;
-  const label = describeLocation(pos.lat, pos.lng);
+  const canPost = Boolean(category && title.trim().length > 2 && pos && !outside);
+  const label = !pos
+    ? 'No spot picked yet'
+    : (searchLabel ?? (lookingUp ? 'Finding the address…' : (place ?? fallback)?.label ?? ''));
+
+  const accuracy = device?.accuracy;
+  const sourceNote = (() => {
+    if (origin === 'picked') return picked!.how === 'search' ? 'From your search' : 'Pinned on the map';
+    if (origin === 'scan') return `From the ${scan!.name} QR`;
+    if (origin === 'device') {
+      if (loc.source === 'demo') return `Demo location in ${district.area}`;
+      if (accuracy == null) return 'From your location';
+      return accuracy > 50
+        ? `From your location, accurate to about ${formatMeters(accuracy)}. Drag the pin to the exact spot.`
+        : `From your location · ±${Math.round(accuracy)} m`;
+    }
+    return null;
+  })();
+  const whyNoPin = (() => {
+    if (device && !deviceInside) return `You seem to be outside ${district.name}.`;
+    if (loc.status === 'denied') return 'Location is off for this site.';
+    if (loc.status === 'unavailable') return 'Your location isn’t available on this device.';
+    if (loc.status === 'timeout') return 'Couldn’t find your location.';
+    return 'Finding your location…';
+  })();
+
+  const pickPoint = (point: Point, how: 'map' | 'search', label?: string) => {
+    setPicked({ point: { lat: point.lat, lng: point.lng }, how, label });
+    setQuery('');
+  };
 
   const submit = async () => {
-    if (!category || !canPost || posting) return;
+    if (!category || !canPost || !pos || posting) return;
     setPosting(true);
+    // Usually cached already; falls back to the offline label if GeoSearch is unreachable.
+    const finalLabel = searchLabel ?? (await labelFor(pos)).label;
     const id = await store.addIssue(
       {
         title: title.trim(),
@@ -80,7 +134,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         category,
         lat: pos.lat,
         lng: pos.lng,
-        locationLabel: label,
+        locationLabel: finalLabel,
         via: scan ? `QR · ${scan.name} ${scan.code}` : 'Map · problempins.org',
         scanCode: scan?.code,
       },
@@ -128,29 +182,88 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         <section>
           <h2 className={sectionLabel}>LOCATION</h2>
           <div className="overflow-hidden rounded-xl border border-slate-200">
-            <div className="h-40">
+            <div className="h-48">
               <IssueMap
                 issues={[]}
-                center={pos}
-                zoom={17}
+                center={pos ?? district.center}
+                zoom={pos ? 17 : district.zoom}
                 pick={pos}
-                onPick={(p) => {
-                  setPos(p);
-                  setMoved(true);
-                }}
+                onPick={(p) => pickPoint(p, 'map')}
+                showYou
+                you={device}
               />
             </div>
-            <div className="flex items-center justify-between px-3 py-2.5">
-              <div>
-                <p className="font-semibold">{label}</p>
+            <div className="flex items-start justify-between gap-3 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className={`font-semibold ${pos && (searchLabel || !lookingUp) ? '' : 'text-slate-500'}`}>{label}</p>
                 <p className="text-xs text-slate-500">
-                  {moved ? 'Pinned on the map' : scan ? `From the ${scan.name} QR` : 'From your location · ±8 m'}
+                  {sourceNote ?? (
+                    <>
+                      {whyNoPin} Search an address or tap the map where the problem is.
+                    </>
+                  )}
                 </p>
               </div>
-              <span className="text-xs font-medium text-brand">Tap map to adjust</span>
+              {pos && <span className="shrink-0 text-xs font-medium text-brand">Drag or tap to adjust</span>}
+            </div>
+            <div className="border-t border-slate-100">
+              <label className="flex items-center gap-2 px-3">
+                <Search className="h-4 w-4 shrink-0 text-slate-400" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search an address"
+                  aria-label="Search an address"
+                  className="h-10 w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
+                />
+                {query && (
+                  <button onClick={() => setQuery('')} aria-label="Clear address search">
+                    <X className="h-4 w-4 text-slate-400" />
+                  </button>
+                )}
+              </label>
+              {query.trim().length >= 3 && (
+                <ul className="border-t border-slate-100 text-sm">
+                  {addresses.results.map((a) => (
+                    <li key={a.id}>
+                      <button onClick={() => pickPoint(a, 'search', a.label)} className="w-full px-3 py-2 text-left hover:bg-slate-50">
+                        <span className="font-medium">{a.label}</span>
+                        {a.detail && <span className="text-slate-500"> · {a.detail}</span>}
+                      </button>
+                    </li>
+                  ))}
+                  {addresses.status === 'loading' && !addresses.results.length && (
+                    <li className="px-3 py-2 text-slate-500">Searching…</li>
+                  )}
+                  {addresses.status === 'done' && !addresses.results.length && (
+                    <li className="px-3 py-2 text-slate-500">No New York City address matches.</li>
+                  )}
+                  {addresses.status === 'error' && (
+                    <li className="px-3 py-2 text-slate-500">Address search isn’t reachable. Tap the map instead.</li>
+                  )}
+                </ul>
+              )}
             </div>
           </div>
         </section>
+
+        {outside && (
+          <section className="rounded-xl border border-slate-300 bg-slate-50 p-4">
+            <p className="font-semibold">Outside {district.name}</p>
+            <p className="mt-1 text-sm text-slate-700">
+              {district.name} handles problems in {district.area} only, so it can’t take this pin. For other places in New
+              York City, report it to 311.
+            </p>
+            <a
+              href="https://portal.311.nyc.gov/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-block text-sm font-semibold text-brand"
+            >
+              Report it to NYC 311 →
+            </a>
+          </section>
+        )}
 
         {similar && (
           <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
@@ -244,7 +357,13 @@ export default function NewPin({ category: initialCategory, from }: { category: 
           {posting ? 'Posting…' : 'Post pin'}
         </button>
         <p className="mt-2 text-center text-xs text-slate-500">
-          {canPost ? 'Posted publicly. Your name is not shown.' : 'Pick a category and add a short title.'}
+          {!pos
+            ? 'Search an address or tap the map to place the pin.'
+            : outside
+              ? `This spot is outside ${district.name}.`
+              : canPost
+                ? 'Posted publicly. Your name is not shown.'
+                : 'Pick a category and add a short title.'}
         </p>
       </footer>
     </div>
