@@ -1,25 +1,35 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, ChevronUp, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
-import { CATEGORIES, CATEGORY_ORDER } from '../data/meta';
-import { SCAN_POINTS } from '../data/sampleData';
-import { YOU_ARE_HERE, at, describeLocation, distanceMeters } from '../data/geo';
+import { isDemo } from '../config';
+import { CATEGORIES } from '../data/meta';
+import { YOU_ARE_HERE, describeLocation, distanceMeters } from '../data/geo';
 import type { Category } from '../data/types';
 import { formatMeters } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
-function resizeImage(file: File, max = 480): Promise<string> {
+interface Photo {
+  blob: Blob;
+  preview: string;
+}
+
+/**
+ * Downscales a photo to `max` px on its longest side and re-encodes it as JPEG.
+ * Drawing through a canvas also drops EXIF metadata, including GPS. Keep it that way.
+ * The demo keeps photos in localStorage, so it stores them small.
+ */
+function resizeImage(file: File, max = isDemo ? 480 : 1280): Promise<Photo> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       const scale = Math.min(1, max / Math.max(img.width, img.height));
       const canvas = document.createElement('canvas');
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(img.src);
-      resolve(canvas.toDataURL('image/jpeg', 0.75));
+      canvas.toBlob((blob) => (blob ? resolve({ blob, preview: URL.createObjectURL(blob) }) : reject(new Error('Could not read photo'))), 'image/jpeg', 0.8);
     };
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
@@ -28,8 +38,13 @@ function resizeImage(file: File, max = 480): Promise<string> {
 
 export default function NewPin({ category: initialCategory, from }: { category: string | null; from: string | null }) {
   const store = useStore();
-  const scan = from ? SCAN_POINTS[from] : undefined;
-  const start = scan ? at(scan.street, scan.ave) : YOU_ARE_HERE;
+  const { district, track } = store;
+  const scan = from ? store.scanPoints.find((p) => p.code === from) : undefined;
+  const start = scan ? { lat: scan.lat, lng: scan.lng } : YOU_ARE_HERE;
+
+  useEffect(() => {
+    track({ name: 'pin_start', scanCode: scan?.code, props: { via: scan ? 'qr' : 'map' } });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [category, setCategory] = useState<Category | null>(
     initialCategory && initialCategory in CATEGORIES ? (initialCategory as Category) : null,
@@ -38,7 +53,8 @@ export default function NewPin({ category: initialCategory, from }: { category: 
   const [moved, setMoved] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [posting, setPosting] = useState(false);
   const [dismissedSimilar, setDismissedSimilar] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -54,19 +70,24 @@ export default function NewPin({ category: initialCategory, from }: { category: 
   const canPost = category && title.trim().length > 2;
   const label = describeLocation(pos.lat, pos.lng);
 
-  const submit = () => {
-    if (!category || !canPost) return;
-    store.addIssue({
-      title: title.trim(),
-      description: description.trim(),
-      category,
-      lat: pos.lat,
-      lng: pos.lng,
-      locationLabel: label,
-      photos,
-      via: scan ? `QR · ${scan.name} ${from}` : 'Map · problempins.org',
-    });
-    navigate('/');
+  const submit = async () => {
+    if (!category || !canPost || posting) return;
+    setPosting(true);
+    const id = await store.addIssue(
+      {
+        title: title.trim(),
+        description: description.trim(),
+        category,
+        lat: pos.lat,
+        lng: pos.lng,
+        locationLabel: label,
+        via: scan ? `QR · ${scan.name} ${scan.code}` : 'Map · problempins.org',
+        scanCode: scan?.code,
+      },
+      photos.map((p) => p.blob),
+    );
+    setPosting(false);
+    if (id) navigate('/');
   };
 
   const sectionLabel = 'mb-2 font-mono text-[11px] tracking-wider text-slate-500';
@@ -89,7 +110,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         <section>
           <h2 className={sectionLabel}>CATEGORY</h2>
           <div className="grid grid-cols-3 gap-2">
-            {CATEGORY_ORDER.map((c) => (
+            {district.categories.map((c) => (
               <button
                 key={c}
                 onClick={() => setCategory(c)}
@@ -140,7 +161,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
             <div className="mt-3 flex items-center gap-4">
               <button
                 onClick={() => {
-                  store.vote(similar.issue.id);
+                  store.vote(similar.issue.id, 'similar');
                   navigate(`/i/${similar.issue.id}`);
                 }}
                 className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white"
@@ -168,8 +189,8 @@ export default function NewPin({ category: initialCategory, from }: { category: 
           <h2 className={sectionLabel}>PHOTOS · {photos.length}</h2>
           <div className="flex gap-2">
             {photos.map((p, idx) => (
-              <div key={idx} className="relative">
-                <img src={p} alt="" className="h-[68px] w-[68px] rounded-lg object-cover" />
+              <div key={p.preview} className="relative">
+                <img src={p.preview} alt="" className="h-[68px] w-[68px] rounded-lg object-cover" />
                 <button
                   onClick={() => setPhotos(photos.filter((_, i) => i !== idx))}
                   className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-ink text-white"
@@ -217,10 +238,10 @@ export default function NewPin({ category: initialCategory, from }: { category: 
       <footer className="sticky bottom-0 border-t border-slate-100 bg-white px-5 pb-4 pt-3">
         <button
           onClick={submit}
-          disabled={!canPost}
+          disabled={!canPost || posting}
           className="w-full rounded-xl bg-brand py-3.5 text-lg font-semibold text-white hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Post pin
+          {posting ? 'Posting…' : 'Post pin'}
         </button>
         <p className="mt-2 text-center text-xs text-slate-500">
           {canPost ? 'Posted publicly. Your name is not shown.' : 'Pick a category and add a short title.'}

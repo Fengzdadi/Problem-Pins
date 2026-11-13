@@ -336,7 +336,3 @@ export const SAMPLE_ISSUES: Issue[] = [
     owner: null,
   }),
 ];
-
-export const SCAN_POINTS: Record<string, { name: string; detail: string; street: number; ave: number; issueId: string }> = {
-  'Q-12': { name: 'BID noticeboard, W 16th St', detail: 'Between 9th and 10th Ave', street: 16, ave: 0.45, issueId: 'PP-2402' },
-};

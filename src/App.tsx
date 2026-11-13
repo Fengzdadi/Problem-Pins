@@ -13,7 +13,11 @@ import Overview from './org/Overview';
 import Issues from './org/Issues';
 import OrgMap from './org/OrgMap';
 import Reports from './org/Reports';
+import QrPosters from './org/QrPosters';
+import Login from './org/Login';
+import RequireStaff from './org/RequireStaff';
 
+/** Demo mode only: switch between the two apps and restore the sample data. */
 function DemoBar({ org }: { org: boolean }) {
   const { reset, toast } = useStore();
   const tab = (active: boolean) =>
@@ -33,9 +37,8 @@ function DemoBar({ org }: { org: boolean }) {
       </div>
       <button
         className="flex items-center gap-1.5 text-slate-400 hover:text-white"
-        onClick={() => {
-          reset();
-          toast('Demo data reset');
+        onClick={async () => {
+          if (await reset()) toast('Demo data reset');
         }}
       >
         <RotateCcw className="h-3.5 w-3.5" /> Reset demo
@@ -46,11 +49,14 @@ function DemoBar({ org }: { org: boolean }) {
 
 export default function App() {
   const { path, query } = useRoute();
+  const { mode } = useStore();
   const seg = path.split('/').filter(Boolean);
   const isOrg = seg[0] === 'org';
 
   let content;
-  if (isOrg) {
+  if (isOrg && seg[1] === 'login') {
+    content = <Login next={query.get('next')} />;
+  } else if (isOrg) {
     const section = (seg[1] ?? 'overview') as OrgSection;
     let page;
     switch (section) {
@@ -66,10 +72,17 @@ export default function App() {
       case 'reports':
         page = <Reports />;
         break;
+      case 'qr':
+        page = <QrPosters />;
+        break;
       default:
         page = <Overview />;
     }
-    content = <OrgShell active={section === 'sent' || query.get('tab') === 'city' ? 'sent' : section}>{page}</OrgShell>;
+    content = (
+      <RequireStaff path={path}>
+        <OrgShell active={section === 'sent' || query.get('tab') === 'city' ? 'sent' : section}>{page}</OrgShell>
+      </RequireStaff>
+    );
   } else {
     let page;
     switch (seg[0]) {
@@ -80,7 +93,7 @@ export default function App() {
         page = <NewPin category={query.get('cat')} from={query.get('from')} />;
         break;
       case 'scan':
-        page = <ScanLanding code={seg[1] ?? 'Q-12'} />;
+        page = <ScanLanding code={seg[1] ?? ''} source={query.get('src')} />;
         break;
       case 'updates':
         page = <Updates />;
@@ -93,7 +106,7 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <DemoBar org={isOrg} />
+      {mode === 'demo' && <DemoBar org={isOrg} />}
       <div className="min-h-0 flex-1">{content}</div>
       <Toast />
     </div>

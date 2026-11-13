@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
 import L from 'leaflet';
 import { Circle, CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { config } from '../config';
 import { STATUSES } from '../data/meta';
-import { NEIGHBORHOOD_CENTER, YOU_ARE_HERE } from '../data/geo';
+import { YOU_ARE_HERE } from '../data/geo';
 import type { Issue } from '../data/types';
+import { useStore } from '../store';
 import markerSvg from '../../brand/map-marker.svg?raw';
 
 interface LatLng {
@@ -78,7 +80,8 @@ export default function IssueMap({
   interactive = true,
   className = '',
 }: Props) {
-  const start = center ?? NEIGHBORHOOD_CENTER;
+  const { district } = useStore();
+  const start = center ?? district.center;
   const ordered = [...issues].sort((a, b) => a.votes - b.votes);
 
   return (
@@ -93,9 +96,7 @@ export default function IssueMap({
       touchZoom={interactive}
       className={`h-full w-full ${className}`}
     >
-      <TileLayer
-        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'      />
+      <TileLayer url={config.mapTiles.url} attribution={config.mapTiles.attribution} />
       <ResizeWatcher />
       <FlyTo center={center} zoom={zoom} />
       {onPick && <ClickToPick onPick={onPick} />}

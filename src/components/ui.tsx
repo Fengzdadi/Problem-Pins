@@ -1,5 +1,6 @@
 import { Accessibility, Armchair, CircleHelp, Lightbulb, Trash2, Volume2, type LucideIcon } from 'lucide-react';
 import markUrl from '../../brand/mark.svg';
+import { isDemo } from '../config';
 import { CATEGORIES, STATUSES } from '../data/meta';
 import type { Category, Issue, Status } from '../data/types';
 import { useStore } from '../store';
@@ -41,7 +42,9 @@ export function StatusTag({ status, resident = false, className = '' }: { status
   );
 }
 
+/** Marks screens that show sample data. Renders nothing in live mode. */
 export function SampleBadge() {
+  if (!isDemo) return null;
   return (
     <span className="rounded border border-amber-300 bg-amber-50 px-2 py-1 font-mono text-[10px] tracking-wider text-amber-700">
       SAMPLE DATA

@@ -1,13 +1,15 @@
-import { useState } from 'react';
-import { ArrowLeft, Check, ChevronUp, Landmark, User } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, Check, ChevronUp, EyeOff, GitMerge, Landmark, User } from 'lucide-react';
 import { PhotoThumb } from '../components/ui';
-import { CATEGORIES, DISTRICT, STATUSES } from '../data/meta';
-import type { Issue } from '../data/types';
+import { CATEGORIES, STATUSES } from '../data/meta';
+import type { District, FollowContact, Issue } from '../data/types';
 import { daysBetween, shortDate } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
-function statusCopy(issue: Issue) {
+function statusCopy(issue: Issue, district: District) {
+  const DISTRICT = district.name;
+  const { reviewVotes, reviewDays } = district.rules;
   const days = daysBetween(issue.createdAt);
   switch (issue.status) {
     case 'sent_to_city': {
@@ -22,7 +24,7 @@ function statusCopy(issue: Issue) {
     case 'open':
       return {
         title: days > 14 ? 'Nobody has picked this up yet' : 'New · waiting for review',
-        body: `${DISTRICT} reviews problems with 50+ neighbors or that stay open 30+ days. Every +1 moves it up their list.`,
+        body: `${DISTRICT} reviews problems with ${reviewVotes}+ neighbors or that stay open ${reviewDays}+ days. Every +1 moves it up their list.`,
       };
     case 'in_review':
       return { title: `${issue.owner ?? DISTRICT} is looking into it`, body: 'They are checking who owns this and what it takes to fix.' };
@@ -36,11 +38,24 @@ function statusCopy(issue: Issue) {
   }
 }
 
+/** "Phone or email" field → a contact the backend can store privately. */
+function parseContact(value: string): FollowContact | undefined {
+  const v = value.trim();
+  if (!v) return undefined;
+  return v.includes('@') ? { email: v } : { phone: v };
+}
+
 export default function IssueDetail({ id }: { id?: string }) {
   const store = useStore();
+  const { district, track } = store;
   const issue = id ? store.getIssue(id) : undefined;
   const [contact, setContact] = useState('');
   const [note, setNote] = useState('');
+  const exists = Boolean(issue);
+
+  useEffect(() => {
+    if (id && exists) track({ name: 'issue_view', issueId: id });
+  }, [id, exists]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!issue) {
     return (
@@ -53,10 +68,25 @@ export default function IssueDetail({ id }: { id?: string }) {
     );
   }
 
+  if (issue.mergedInto) {
+    return (
+      <div className="p-8 text-center">
+        <GitMerge className="mx-auto mb-3 h-6 w-6 text-slate-400" />
+        <p className="mb-4 text-slate-600">
+          {district.name} merged this pin into <span className="font-mono">{issue.mergedInto}</span>, which reports the same problem.
+          Votes and followers moved with it.
+        </p>
+        <button className="font-semibold text-brand" onClick={() => navigate(`/i/${issue.mergedInto}`)}>
+          Open {issue.mergedInto}
+        </button>
+      </div>
+    );
+  }
+
   const voted = store.voted.includes(issue.id);
   const following = store.following.includes(issue.id);
   const status = STATUSES[issue.status];
-  const copy = statusCopy(issue);
+  const copy = statusCopy(issue, district);
   const rank =
     [...store.issues].filter((i) => i.status !== 'fixed').sort((a, b) => b.votes - a.votes).findIndex((i) => i.id === issue.id) + 1;
 
@@ -77,6 +107,12 @@ export default function IssueDetail({ id }: { id?: string }) {
           </span>
         )}
       </div>
+
+      {issue.hidden && (
+        <div className="flex items-center gap-2 bg-slate-800 px-5 py-2.5 text-sm font-medium text-white">
+          <EyeOff className="h-4 w-4" /> Hidden by staff{issue.hiddenReason ? `: ${issue.hiddenReason}` : ''}. Only staff can see this.
+        </div>
+      )}
 
       {voted && (
         <div className="flex items-center gap-2 bg-emerald-50 px-5 py-2.5 text-sm font-medium text-emerald-800">
@@ -103,7 +139,7 @@ export default function IssueDetail({ id }: { id?: string }) {
             </span>
           ) : (
             <button
-              onClick={() => store.vote(issue.id)}
+              onClick={() => store.vote(issue.id, 'detail')}
               className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 font-semibold text-white hover:bg-brand-dark"
             >
               <ChevronUp className="h-4 w-4" strokeWidth={2.5} /> +1 This is my problem too · {issue.votes}
@@ -111,7 +147,7 @@ export default function IssueDetail({ id }: { id?: string }) {
           )}
           {rank > 0 && (
             <p className="text-sm leading-snug text-slate-600">
-              {rank === 1 ? 'Most +1’d problem in West Chelsea this month' : `#${rank} most +1’d problem nearby`}
+              {rank === 1 ? `Most +1’d problem in ${district.area} this month` : `#${rank} most +1’d problem nearby`}
             </p>
           )}
         </div>
@@ -142,7 +178,7 @@ export default function IssueDetail({ id }: { id?: string }) {
               </div>
             </div>
           )}
-          <p className="mt-3 text-[11px] text-slate-500">Problem Pins status, tracked by {DISTRICT}. Not an official NYC 311 status.</p>
+          <p className="mt-3 text-[11px] text-slate-500">Problem Pins status, tracked by {district.name}. Not an official NYC 311 status.</p>
         </div>
 
         <section>
@@ -190,12 +226,13 @@ export default function IssueDetail({ id }: { id?: string }) {
           ))}
           <form
             className="mt-3 flex gap-2"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
               if (!note.trim()) return;
-              store.addComment(issue.id, note.trim());
-              setNote('');
-              store.toast('Note added');
+              if (await store.addComment(issue.id, note.trim())) {
+                setNote('');
+                store.toast('Note added');
+              }
             }}
           >
             <input
@@ -218,10 +255,11 @@ export default function IssueDetail({ id }: { id?: string }) {
               <p className="mb-2 font-semibold">Get a text or email when this changes</p>
               <form
                 className="flex gap-2"
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
-                  store.follow(issue.id);
-                  store.toast(contact ? `We’ll notify ${contact}` : 'Following this problem');
+                  if (await store.follow(issue.id, parseContact(contact))) {
+                    store.toast(contact ? `We’ll notify ${contact}` : 'Following this problem');
+                  }
                 }}
               >
                 <input

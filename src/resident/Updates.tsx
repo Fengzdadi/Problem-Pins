@@ -1,6 +1,6 @@
 import { ArrowLeft, Check, ChevronUp, Landmark, Send, User } from 'lucide-react';
 import { Logo } from '../components/ui';
-import { DEMO_TODAY, daysBetween, shortDate } from '../lib/format';
+import { daysBetween, shortDate, today } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
@@ -24,13 +24,14 @@ const ICONS = {
 
 export default function Updates() {
   const store = useStore();
+  const now = today();
   const followedIds = new Set([...store.voted, ...store.following]);
   const followed = store.issues.filter((i) => followedIds.has(i.id));
   const toConfirm = followed.filter((i) => i.status === 'fixed' && !store.confirmed[i.id]);
 
   const feed: FeedItem[] = followed.flatMap((issue) => [
     ...issue.updates
-      .filter((u) => u.author !== 'You')
+      .filter((u) => !u.mine)
       .map<FeedItem>((u) => ({
         key: u.id,
         issueId: issue.id,
@@ -50,13 +51,13 @@ export default function Updates() {
         kind: h.text.startsWith('Marked fixed') ? 'fixed' : /City|311/.test(h.text) ? 'city' : 'event',
       })),
     ...(store.voted.includes(issue.id) && !issue.isUserReport
-      ? [{ key: `${issue.id}-vote`, issueId: issue.id, date: DEMO_TODAY, title: 'You +1’d a problem', body: issue.title, kind: 'vote' as const }]
+      ? [{ key: `${issue.id}-vote`, issueId: issue.id, date: now, title: 'You +1’d a problem', body: issue.title, kind: 'vote' as const }]
       : []),
   ]);
   feed.sort((a, b) => b.date.localeCompare(a.date));
 
-  const today = feed.filter((f) => f.date === DEMO_TODAY);
-  const earlier = feed.filter((f) => f.date !== DEMO_TODAY && daysBetween(f.date) <= 30);
+  const todays = feed.filter((f) => f.date === now);
+  const earlier = feed.filter((f) => f.date !== now && daysBetween(f.date) <= 30);
 
   const Group = ({ label, items }: { label: string; items: FeedItem[] }) =>
     items.length ? (
@@ -93,7 +94,7 @@ export default function Updates() {
           </button>
           <Logo />
         </div>
-        <span className="font-mono text-xs text-slate-400">{shortDate(DEMO_TODAY)}</span>
+        <span className="font-mono text-xs text-slate-400">{shortDate(now)}</span>
       </div>
 
       <h1 className="text-3xl font-bold">Your updates</h1>
@@ -111,18 +112,16 @@ export default function Updates() {
           </p>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
-              onClick={() => {
-                store.confirmFix(issue.id, 'yes');
-                store.toast('Thanks for confirming!');
+              onClick={async () => {
+                if (await store.confirmFix(issue.id, 'yes')) store.toast('Thanks for confirming!');
               }}
               className="rounded-lg bg-emerald-700 py-2.5 font-semibold text-white"
             >
               Yes, it’s fixed
             </button>
             <button
-              onClick={() => {
-                store.confirmFix(issue.id, 'no');
-                store.toast('Got it. We’ll let the District know.');
+              onClick={async () => {
+                if (await store.confirmFix(issue.id, 'no')) store.toast(`Got it. We’ll let ${store.district.name} know.`);
               }}
               className="rounded-lg border border-slate-200 bg-white py-2.5 font-semibold"
             >
@@ -132,7 +131,7 @@ export default function Updates() {
         </div>
       ))}
 
-      <Group label="TODAY" items={today} />
+      <Group label="TODAY" items={todays} />
       <Group label="EARLIER" items={earlier} />
 
       {!followed.length && (

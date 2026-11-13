@@ -1,22 +1,47 @@
+import { useEffect } from 'react';
 import { Check, ChevronUp } from 'lucide-react';
 import { Logo, PhotoThumb, StatusTag } from '../components/ui';
-import { CATEGORIES, CATEGORY_ORDER, DISTRICT } from '../data/meta';
-import { SCAN_POINTS } from '../data/sampleData';
+import { CATEGORIES } from '../data/meta';
 import { daysBetween } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
-export default function ScanLanding({ code }: { code: string }) {
+/** Where a printed QR code lands. `source` is "qr" when the visit came through the short link. */
+export default function ScanLanding({ code, source }: { code: string; source: string | null }) {
   const store = useStore();
-  const point = SCAN_POINTS[code] ?? SCAN_POINTS['Q-12'];
-  const issue = store.getIssue(point.issueId);
+  const { district, track } = store;
+  const point = store.scanPoints.find((p) => p.code === code);
+  const linked = point?.issueId ? store.getIssue(point.issueId) : undefined;
+  // Follow a merge so the poster keeps working after staff dedupe the problem.
+  const issue = linked?.mergedInto ? store.getIssue(linked.mergedInto) : linked;
   const voted = issue ? store.voted.includes(issue.id) : false;
+  const known = Boolean(point);
+
+  useEffect(() => {
+    track({ name: 'scan_view', scanCode: code, props: { src: source ?? 'link', known } });
+  }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!point) {
+    return (
+      <div className="px-5 pb-8 pt-8">
+        <Logo />
+        <h1 className="mt-8 text-2xl font-bold">This code isn’t active</h1>
+        <p className="mt-2 text-slate-600">
+          The poster you scanned (<span className="font-mono">{code || 'no code'}</span>) isn’t linked to a spot anymore. You can still pin a
+          problem on the {district.area} map.
+        </p>
+        <button onClick={() => navigate('/')} className="mt-5 font-semibold text-brand">
+          Open the map →
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="px-5 pb-8 pt-8">
       <div className="mb-8 flex items-center justify-between">
         <Logo />
-        <span className="text-sm text-slate-500">with {DISTRICT}</span>
+        <span className="text-sm text-slate-500">with {district.name}</span>
       </div>
 
       <p className="font-mono text-[11px] tracking-wider text-slate-500">YOU SCANNED</p>
@@ -42,7 +67,7 @@ export default function ScanLanding({ code }: { code: string }) {
             </div>
           ) : (
             <button
-              onClick={() => store.vote(issue.id)}
+              onClick={() => store.vote(issue.id, 'scan')}
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 font-semibold text-white hover:bg-brand-dark"
             >
               <ChevronUp className="h-5 w-5" strokeWidth={2.5} /> +1 This is my problem too
@@ -59,7 +84,7 @@ export default function ScanLanding({ code }: { code: string }) {
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        {CATEGORY_ORDER.map((c) => (
+        {district.categories.map((c) => (
           <button
             key={c}
             onClick={() => navigate(`/new?cat=${c}&from=${code}`)}

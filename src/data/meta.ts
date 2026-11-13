@@ -1,5 +1,8 @@
 import type { Category, Status } from './types';
 
+// Fixed vocabularies shared by every district. District-specific settings (name, teams,
+// boundary, rules) live in the `District` record, see `demoDistrict.ts`.
+
 export const CATEGORIES: Record<Category, { label: string; color: string }> = {
   lighting: { label: 'Lighting', color: '#e8542a' },
   seating: { label: 'Seating', color: '#c98a1b' },
@@ -20,7 +23,3 @@ export const STATUSES: Record<Status, { label: string; residentLabel: string; co
 };
 
 export const STATUS_ORDER: Status[] = ['open', 'in_review', 'scheduled', 'sent_to_city', 'fixed'];
-
-export const OWNERS = ['BID crew', 'West Side District staff'];
-
-export const DISTRICT = 'West Side District';

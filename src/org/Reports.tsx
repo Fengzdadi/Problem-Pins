@@ -16,11 +16,11 @@ const MEDIAN_DAYS: [Category, number, string?][] = [
 ];
 
 export default function Reports() {
-  const { issues, toast } = useStore();
+  const { issues, toast, district } = useStore();
   const waiting = issues
     .filter((i) => i.status === 'sent_to_city' || (i.agency && !i.cityRequest && i.status !== 'fixed'))
     .sort((a, b) => daysBetween(b.cityRequest?.sentOn ?? b.createdAt) - daysBetween(a.cityRequest?.sentOn ?? a.createdAt));
-  const quotes = issues.flatMap((i) => i.updates.filter((u) => u.role === 'resident' && u.author !== 'You').map((u) => ({ u, i }))).slice(0, 2);
+  const quotes = issues.flatMap((i) => i.updates.filter((u) => u.role === 'resident' && !u.mine).map((u) => ({ u, i }))).slice(0, 2);
 
   const kpis = [
     ['Problems pinned', '71', '+22 vs Aug'],
@@ -36,7 +36,7 @@ export default function Reports() {
         <div>
           <p className="font-mono text-[11px] tracking-wider text-slate-500">REPORTS / MONTHLY</p>
           <h1 className="text-2xl font-bold">September 2026 report</h1>
-          <p className="text-sm text-slate-600">For the West Side District board meeting on Oct 21</p>
+          <p className="text-sm text-slate-600">For the {district.name} board meeting on Oct 21</p>
         </div>
         <div className="flex items-center gap-3 print:hidden">
           <SampleBadge />

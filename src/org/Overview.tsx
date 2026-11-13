@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { ArrowRight, FileText } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { SampleBadge, StatusTag } from '../components/ui';
-import { CATEGORIES, CATEGORY_ORDER, STATUSES, STATUS_ORDER, DISTRICT } from '../data/meta';
+import { CATEGORIES, CATEGORY_ORDER, STATUSES, STATUS_ORDER } from '../data/meta';
 import { daysBetween } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
-import { ATTENTION_RULE, ActionButton, attentionFor, attentionReason } from './actions';
+import { ActionButton, attentionFor, attentionReason, attentionRule } from './actions';
 
 export default function Overview() {
-  const { issues, toast } = useStore();
+  const { issues, toast, district } = useStore();
   const [range, setRange] = useState('7 days');
 
   const open = issues.filter((i) => i.status !== 'fixed');
@@ -18,7 +18,7 @@ export default function Overview() {
   const fixed = issues.filter((i) => i.status === 'fixed');
   const confirmed = fixed.filter((i) => i.confirmedFixed > 0);
   const attention = open.flatMap((i) => {
-    const kind = attentionFor(i);
+    const kind = attentionFor(i, district.rules);
     return kind ? [{ issue: i, kind }] : [];
   });
   const top = [...open].sort((a, b) => b.votes - a.votes).slice(0, 6);
@@ -44,7 +44,7 @@ export default function Overview() {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-mono text-[11px] tracking-wider text-slate-500">WEEK OF OCT 12, 2026</p>
-          <h1 className="text-2xl font-bold">{DISTRICT}</h1>
+          <h1 className="text-2xl font-bold">{district.name}</h1>
         </div>
         <div className="flex items-center gap-3">
           <SampleBadge />
@@ -101,7 +101,7 @@ export default function Overview() {
             </div>
           ))}
           {!attention.length && <p className="px-5 py-8 text-center text-sm text-slate-500">Nothing needs attention. Nice.</p>}
-          <p className="px-5 py-3 text-xs text-slate-400">{ATTENTION_RULE}</p>
+          <p className="px-5 py-3 text-xs text-slate-400">{attentionRule(district.rules)}</p>
         </section>
 
         <section className={card}>

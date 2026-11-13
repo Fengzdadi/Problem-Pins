@@ -17,7 +17,7 @@ const AGE_OPTIONS = [
 ];
 
 export default function OrgMap() {
-  const { issues } = useStore();
+  const { issues, district } = useStore();
   const [categories, setCategories] = useState<Category[]>(CATEGORY_ORDER);
   const [statuses, setStatuses] = useState<Status[]>(['open', 'in_review', 'scheduled', 'sent_to_city']);
   const [minAge, setMinAge] = useState(0);
@@ -29,7 +29,7 @@ export default function OrgMap() {
     (i) => categories.includes(i.category) && statuses.includes(i.status) && daysBetween(i.createdAt) >= minAge,
   );
   const selected = visible.find((i) => i.id === selectedId);
-  const action = selected ? attentionFor(selected) : null;
+  const action = selected ? attentionFor(selected, district.rules) : null;
 
   const toggle = <T,>(list: T[], value: T, set: (v: T[]) => void) =>
     set(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);

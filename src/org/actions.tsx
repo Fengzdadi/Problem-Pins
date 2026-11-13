@@ -1,20 +1,22 @@
 import { Send } from 'lucide-react';
-import type { Issue } from '../data/types';
+import type { AttentionRules, Issue } from '../data/types';
 import { daysBetween } from '../lib/format';
 import { useStore } from '../store';
 
 export type Attention = 'nudge' | 'assign' | 'forward';
 
-export const ATTENTION_RULE = 'Rule: flag anything with 50+ votes or 30+ days and no owner, City-owned problems not yet sent, and City requests with no reply in 10+ days';
+export function attentionRule(rules: AttentionRules) {
+  return `Rule: flag anything with ${rules.reviewVotes}+ votes or ${rules.reviewDays}+ days and no owner, City-owned problems not yet sent, and City requests with no reply in ${rules.cityNoReplyDays}+ days`;
+}
 
-export function attentionFor(issue: Issue): Attention | null {
+export function attentionFor(issue: Issue, rules: AttentionRules): Attention | null {
   if (issue.status === 'fixed') return null;
   if (issue.status === 'sent_to_city' && issue.cityRequest) {
     const since = issue.cityRequest.lastFollowUp ?? issue.cityRequest.sentOn;
-    return issue.votes >= 50 && daysBetween(since) >= 10 ? 'nudge' : null;
+    return issue.votes >= rules.reviewVotes && daysBetween(since) >= rules.cityNoReplyDays ? 'nudge' : null;
   }
-  if (issue.agency && !issue.cityRequest && issue.votes >= 25) return 'forward';
-  if (!issue.owner && (issue.votes >= 50 || daysBetween(issue.createdAt) >= 30)) return 'assign';
+  if (issue.agency && !issue.cityRequest && issue.votes >= rules.forwardVotes) return 'forward';
+  if (!issue.owner && (issue.votes >= rules.reviewVotes || daysBetween(issue.createdAt) >= rules.reviewDays)) return 'assign';
   return null;
 }
 
@@ -30,15 +32,15 @@ export function attentionReason(issue: Issue) {
 }
 
 export function ActionButton({ issue, kind, size = 'md' }: { issue: Issue; kind: Attention; size?: 'sm' | 'md' }) {
-  const { nudgeCity, assign, sendToCity, toast } = useStore();
+  const { nudgeCity, assign, sendToCity, toast, district } = useStore();
+  const team = district.teams[0];
   const pad = size === 'sm' ? 'px-3 py-1.5 text-xs' : 'px-3.5 py-2 text-sm';
   if (kind === 'nudge')
     return (
       <button
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation();
-          nudgeCity(issue.id);
-          toast(`Followed up on ${issue.cityRequest?.sr} with ${issue.votes} votes attached`);
+          if (await nudgeCity(issue.id)) toast(`Followed up on ${issue.cityRequest?.sr} with ${issue.votes} votes attached`);
         }}
         className={`flex items-center gap-1.5 rounded-lg bg-brand font-semibold text-white hover:bg-brand-dark ${pad}`}
       >
@@ -48,10 +50,9 @@ export function ActionButton({ issue, kind, size = 'md' }: { issue: Issue; kind:
   if (kind === 'forward')
     return (
       <button
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation();
-          sendToCity(issue.id);
-          toast(`Logged a 311 request for ${issue.id}`);
+          if (await sendToCity(issue.id)) toast(`Logged a 311 request for ${issue.id}`);
         }}
         className={`flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white font-semibold hover:border-slate-300 ${pad}`}
       >
@@ -60,10 +61,9 @@ export function ActionButton({ issue, kind, size = 'md' }: { issue: Issue; kind:
     );
   return (
     <button
-      onClick={(e) => {
+      onClick={async (e) => {
         e.stopPropagation();
-        assign(issue.id, 'BID crew');
-        toast(`${issue.id} assigned to BID crew`);
+        if (await assign(issue.id, team)) toast(`${issue.id} assigned to ${team}`);
       }}
       className={`rounded-lg bg-brand font-semibold text-white hover:bg-brand-dark ${pad}`}
     >

@@ -1,13 +1,19 @@
 import type { ReactNode } from 'react';
-import { FileText, Inbox, LayoutGrid, Map as MapIcon, Send, SlidersHorizontal, type LucideIcon } from 'lucide-react';
+import { FileText, Inbox, LayoutGrid, Map as MapIcon, QrCode, Send, SlidersHorizontal, type LucideIcon } from 'lucide-react';
 import { Logo } from '../components/ui';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
-export type OrgSection = 'overview' | 'issues' | 'map' | 'reports' | 'sent';
+export type OrgSection = 'overview' | 'issues' | 'map' | 'reports' | 'sent' | 'qr';
 
 export default function OrgShell({ active, children }: { active: OrgSection; children: ReactNode }) {
-  const { issues } = useStore();
+  const { issues, district, staff } = useStore();
+  const initials = (staff?.name ?? '?')
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
   const unresolved = issues.filter((i) => i.status !== 'fixed' && i.status !== 'sent_to_city').length;
   const sent = issues.filter((i) => i.status === 'sent_to_city').length;
 
@@ -17,6 +23,7 @@ export default function OrgShell({ active, children }: { active: OrgSection; chi
     { id: 'map', label: 'Map', Icon: MapIcon, to: '/org/map' },
     { id: 'reports', label: 'Reports', Icon: FileText, to: '/org/reports' },
     { id: 'sent', label: 'Sent to City', Icon: Send, to: '/org/sent', count: sent },
+    { id: 'qr', label: 'QR posters', Icon: QrCode, to: '/org/qr' },
   ];
 
   return (
@@ -25,7 +32,7 @@ export default function OrgShell({ active, children }: { active: OrgSection; chi
         <div className="px-1">
           <Logo dark />
         </div>
-        <p className="mb-3 mt-3 px-1 font-mono text-[10px] tracking-wider text-slate-500">WEST SIDE DISTRICT</p>
+        <p className="mb-3 mt-3 px-1 font-mono text-[10px] tracking-wider text-slate-500">{district.name.toUpperCase()}</p>
         <nav className="space-y-0.5">
           {items.map(({ id, label, Icon, to, count }) => (
             <button
@@ -46,10 +53,12 @@ export default function OrgShell({ active, children }: { active: OrgSection; chi
             <SlidersHorizontal className="h-4 w-4" /> Settings
           </button>
           <div className="flex items-center gap-3 border-t border-white/10 px-1 pt-3">
-            <span className="grid h-7 w-8 place-items-center rounded-full bg-amber-100 text-xs font-semibold text-amber-800">MR</span>
+            <span className="grid h-7 w-8 place-items-center rounded-full bg-amber-100 text-xs font-semibold text-amber-800">
+              {initials}
+            </span>
             <div>
-              <p className="text-sm font-medium text-white">Maya Ruiz</p>
-              <p className="text-xs text-slate-500">Operations manager</p>
+              <p className="text-sm font-medium text-white">{staff?.name ?? 'Not signed in'}</p>
+              <p className="text-xs text-slate-500">{staff?.role ?? ''}</p>
             </div>
           </div>
         </div>

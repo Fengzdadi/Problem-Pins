@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, ExternalLink, FileText, GitMerge, Search, Send } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { CategoryTag, PhotoThumb, SampleBadge, StatusTag } from '../components/ui';
-import { CATEGORIES, OWNERS, STATUSES, STATUS_ORDER } from '../data/meta';
+import { CATEGORIES, STATUSES, STATUS_ORDER } from '../data/meta';
 import type { Issue, Status } from '../data/types';
 import { daysBetween, shortDate, votesPerDay } from '../lib/format';
 import { navigate } from '../router';
@@ -79,9 +79,8 @@ function UpdateResidents({ issue }: { issue: Issue }) {
         </label>
         <button
           disabled={!text.trim()}
-          onClick={() => {
-            postUpdate(issue.id, text.trim(), status);
-            toast(`Update posted · ${issue.following} residents notified`);
+          onClick={async () => {
+            if (await postUpdate(issue.id, text.trim(), status)) toast(`Update posted · ${issue.following} residents notified`);
           }}
           className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
         >
@@ -93,7 +92,7 @@ function UpdateResidents({ issue }: { issue: Issue }) {
 }
 
 function CityCard({ issue }: { issue: Issue }) {
-  const { nudgeCity, sendToCity, assign, toast } = useStore();
+  const { nudgeCity, sendToCity, assign, toast, district } = useStore();
   const req = issue.cityRequest;
 
   if (req) {
@@ -129,9 +128,8 @@ function CityCard({ issue }: { issue: Issue }) {
         ))}
         <div className="flex gap-2 border-t border-slate-100 px-4 py-3">
           <button
-            onClick={() => {
-              nudgeCity(issue.id);
-              toast(`Followed up on ${req.sr} with ${issue.votes} votes attached`);
+            onClick={async () => {
+              if (await nudgeCity(issue.id)) toast(`Followed up on ${req.sr} with ${issue.votes} votes attached`);
             }}
             className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
           >
@@ -156,9 +154,8 @@ function CityCard({ issue }: { issue: Issue }) {
           <p className="mt-1 font-semibold">{issue.agency} handles this, not the District.</p>
           <p className="mt-1 text-sm text-slate-600">Log a 311 request with the neighbors’ votes attached and track the City’s reply here.</p>
           <button
-            onClick={() => {
-              sendToCity(issue.id);
-              toast(`Logged a 311 request for ${issue.id}`);
+            onClick={async () => {
+              if (await sendToCity(issue.id)) toast(`Logged a 311 request for ${issue.id}`);
             }}
             className="mt-3 flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
           >
@@ -170,14 +167,14 @@ function CityCard({ issue }: { issue: Issue }) {
           <span className="text-sm text-slate-600">Owner</span>
           <select
             value={issue.owner ?? ''}
-            onChange={(e) => {
-              assign(issue.id, e.target.value || null);
-              toast(e.target.value ? `Assigned to ${e.target.value}` : 'Unassigned');
+            onChange={async (e) => {
+              const owner = e.target.value || null;
+              if (await assign(issue.id, owner)) toast(owner ? `Assigned to ${owner}` : 'Unassigned');
             }}
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm"
           >
             <option value="">Unassigned</option>
-            {OWNERS.map((o) => (
+            {district.teams.map((o) => (
               <option key={o}>{o}</option>
             ))}
           </select>
@@ -283,9 +280,8 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
                 </button>
                 {issue.status !== 'fixed' && (
                   <button
-                    onClick={() => {
-                      store.setStatus(issue.id, 'fixed');
-                      store.toast(`${issue.id} marked fixed · residents asked to confirm`);
+                    onClick={async () => {
+                      if (await store.setStatus(issue.id, 'fixed')) store.toast(`${issue.id} marked fixed · residents asked to confirm`);
                     }}
                     className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium"
                   >

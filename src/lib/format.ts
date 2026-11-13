@@ -1,19 +1,38 @@
+import { isDemo } from '../config';
+
 /** The sample data is frozen in mid-October 2026 so day counts match the designs. */
 export const DEMO_TODAY = '2026-10-14';
+
+const NY_DATE = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/** A timestamp as a New York calendar date, `YYYY-MM-DD`. */
+export function nyDate(ts: string | number | Date = Date.now()) {
+  return NY_DATE.format(new Date(ts));
+}
+
+/** Today as `YYYY-MM-DD`: frozen in demo mode, New York time in live mode. */
+export function today() {
+  return isDemo ? DEMO_TODAY : nyDate();
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function parse(date: string) {
-  const [y, m, d] = date.split('-').map(Number);
+  const [y, m, d] = date.slice(0, 10).split('-').map(Number);
   return Date.UTC(y, m - 1, d);
 }
 
-export function daysBetween(from: string, to: string = DEMO_TODAY) {
+export function daysBetween(from: string, to: string = today()) {
   return Math.max(0, Math.round((parse(to) - parse(from)) / 86400000));
 }
 
 export function shortDate(date: string) {
-  const [, m, d] = date.split('-').map(Number);
+  const [, m, d] = date.slice(0, 10).split('-').map(Number);
   return `${MONTHS[m - 1]} ${d}`;
 }
 

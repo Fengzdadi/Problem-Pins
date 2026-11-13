@@ -1,243 +1,270 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { SAMPLE_ISSUES } from './data/sampleData';
-import { DISTRICT, STATUSES } from './data/meta';
-import type { Category, Issue, IssueUpdate, Status } from './data/types';
-import { DEMO_TODAY } from './lib/format';
+import { createBackend, type Backend, type NewIssueDraft, type Snapshot } from './backend';
+import type { DataMode } from './config';
+import type {
+  AnalyticsEvent,
+  CityRequestInput,
+  District,
+  FollowContact,
+  Issue,
+  ScanPoint,
+  StaffUser,
+  Status,
+} from './data/types';
 
-const STORAGE_KEY = 'problem-pins-v1';
-
-interface PersistedState {
+/**
+ * The one place screens get data and actions from. It holds the latest backend snapshot,
+ * reloads it after every mutation (and when the backend pings a change), and turns errors
+ * into toasts. Actions resolve to `true` on success and never throw.
+ */
+interface Store {
+  mode: DataMode;
+  district: District;
+  /** Public issues: not hidden, not merged. What residents see. */
   issues: Issue[];
+  /** Staff only: hidden or merged issues. */
+  hiddenIssues: Issue[];
+  scanPoints: ScanPoint[];
   voted: string[];
   following: string[];
   confirmed: Record<string, 'yes' | 'no'>;
-  nextId: number;
-}
-
-export interface NewIssueDraft {
-  title: string;
-  description: string;
-  category: Category;
-  lat: number;
-  lng: number;
-  locationLabel: string;
-  photos: string[];
-  via: string;
-}
-
-interface Store extends PersistedState {
+  staff: StaffUser | null;
   lastCreatedId: string | null;
   clearLastCreated: () => void;
+  /** Finds any issue this viewer can see, including merged ones (for redirects). */
   getIssue: (id: string) => Issue | undefined;
-  vote: (id: string) => void;
-  follow: (id: string) => void;
-  addIssue: (draft: NewIssueDraft) => string;
-  addComment: (id: string, text: string) => void;
-  postUpdate: (id: string, text: string, status?: Status) => void;
-  setStatus: (id: string, status: Status) => void;
-  assign: (id: string, owner: string | null) => void;
-  sendToCity: (id: string) => void;
-  nudgeCity: (id: string) => void;
-  confirmFix: (id: string, answer: 'yes' | 'no') => void;
-  reset: () => void;
+  refresh: () => Promise<void>;
+
+  // residents
+  vote: (id: string, source?: string) => Promise<boolean>;
+  follow: (id: string, contact?: FollowContact) => Promise<boolean>;
+  /** Uploads the photos, creates the issue and resolves to its new ID (null on failure). */
+  addIssue: (draft: Omit<NewIssueDraft, 'photos'>, photos?: Blob[]) => Promise<string | null>;
+  addComment: (id: string, text: string) => Promise<boolean>;
+  confirmFix: (id: string, answer: 'yes' | 'no') => Promise<boolean>;
+
+  // staff
+  postUpdate: (id: string, text: string, status?: Status) => Promise<boolean>;
+  setStatus: (id: string, status: Status) => Promise<boolean>;
+  assign: (id: string, owner: string | null) => Promise<boolean>;
+  sendToCity: (id: string, request?: CityRequestInput) => Promise<boolean>;
+  nudgeCity: (id: string) => Promise<boolean>;
+  hideIssue: (id: string, reason: string) => Promise<boolean>;
+  unhideIssue: (id: string) => Promise<boolean>;
+  mergeIssue: (duplicateId: string, intoId: string) => Promise<boolean>;
+  saveScanPoint: (point: ScanPoint) => Promise<boolean>;
+  deleteScanPoint: (code: string) => Promise<boolean>;
+  listEvents: (since?: string) => Promise<AnalyticsEvent[]>;
+  signIn: (email: string, password: string) => Promise<boolean>;
+  signOut: () => Promise<boolean>;
+
+  track: (event: Omit<AnalyticsEvent, 'at'>) => void;
+  /** Demo only. */
+  reset: () => Promise<boolean>;
   toast: (message: string) => void;
   toastMessage: string | null;
 }
 
-function initialState(): PersistedState {
-  return { issues: SAMPLE_ISSUES, voted: [], following: [], confirmed: {}, nextId: 2461 };
-}
-
-function load(): PersistedState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as PersistedState;
-  } catch {
-    /* fall through to sample data */
-  }
-  return initialState();
-}
-
 const StoreContext = createContext<Store | null>(null);
 
+function message(error: unknown) {
+  return error instanceof Error && error.message ? error.message : 'Something went wrong. Please try again.';
+}
+
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<PersistedState>(load);
+  const [backend, setBackend] = useState<Backend | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [staff, setStaff] = useState<StaffUser | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+  const loadSeq = useRef(0);
+  const refreshTimer = useRef<number | undefined>(undefined);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      /* storage full (large photos) — keep working in memory */
-    }
-  }, [state]);
-
-  const toast = useCallback((message: string) => {
-    setToastMessage(message);
+  const toast = useCallback((text: string) => {
+    setToastMessage(text);
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToastMessage(null), 2800);
   }, []);
 
-  const updateIssue = useCallback((id: string, fn: (issue: Issue) => Issue) => {
-    setState((s) => ({ ...s, issues: s.issues.map((i) => (i.id === id ? fn(i) : i)) }));
+  const reload = useCallback(async (b: Backend) => {
+    const seq = ++loadSeq.current;
+    const next = await b.load();
+    if (seq === loadSeq.current) setSnapshot(next); // ignore out-of-order responses
   }, []);
 
-  const store = useMemo<Store>(() => {
-    const partnerUpdate = (text: string): IssueUpdate => ({
-      id: crypto.randomUUID(),
-      author: DISTRICT,
-      role: 'partner',
-      text,
-      date: DEMO_TODAY,
-    });
+  // Start: pick the backend, load data and the staff session, listen for changes.
+  useEffect(() => {
+    let cancelled = false;
+    let cleanups: (() => void)[] = [];
+    (async () => {
+      try {
+        const b = await createBackend();
+        if (cancelled) return;
+        const [, signedIn] = await Promise.all([reload(b), b.getStaff()]);
+        if (cancelled) return;
+        setStaff(signedIn);
+        setBackend(b);
+        cleanups = [
+          b.subscribe(() => {
+            window.clearTimeout(refreshTimer.current);
+            refreshTimer.current = window.setTimeout(() => void reload(b).catch(() => {}), 250);
+          }),
+          b.onAuthChange((s) => {
+            setStaff(s);
+            void reload(b).catch(() => {});
+          }),
+        ];
+      } catch (error) {
+        if (!cancelled) setLoadError(message(error));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cleanups.forEach((fn) => fn());
+    };
+  }, [reload]);
+
+  const store = useMemo<Store | null>(() => {
+    if (!backend || !snapshot) return null;
+    const b = backend;
+
+    /** Runs a mutation, reloads, and reports failure as a toast. */
+    const run = async (fn: () => Promise<unknown>, event?: Omit<AnalyticsEvent, 'at'>) => {
+      try {
+        await fn();
+        if (event) b.track(event);
+        await reload(b);
+        return true;
+      } catch (error) {
+        toast(message(error));
+        await reload(b).catch(() => {});
+        return false;
+      }
+    };
+
+    /** Optimistic local change for snappy +1/follow; the reload after the mutation corrects it. */
+    const patch = (id: string, fn: (s: Snapshot) => Snapshot) =>
+      setSnapshot((s) => (s && s.issues.some((i) => i.id === id) ? fn(s) : s));
+
+    const visible = snapshot.issues.filter((i) => !i.hidden && !i.mergedInto);
 
     return {
-      ...state,
+      mode: b.mode,
+      district: snapshot.district,
+      issues: visible,
+      hiddenIssues: snapshot.issues.filter((i) => i.hidden || i.mergedInto),
+      scanPoints: snapshot.scanPoints,
+      voted: snapshot.me.voted,
+      following: snapshot.me.following,
+      confirmed: snapshot.me.confirmed,
+      staff,
       lastCreatedId,
       toastMessage,
       toast,
       clearLastCreated: () => setLastCreatedId(null),
-      getIssue: (id) => state.issues.find((i) => i.id === id),
+      getIssue: (id) => snapshot.issues.find((i) => i.id === id),
+      refresh: () => reload(b),
 
-      vote: (id) => {
-        if (state.voted.includes(id)) return;
-        setState((s) => ({
+      vote: (id, source) => {
+        if (snapshot.me.voted.includes(id)) return Promise.resolve(true);
+        patch(id, (s) => ({
           ...s,
-          voted: [...s.voted, id],
-          issues: s.issues.map((i) => {
-            if (i.id !== id) return i;
-            const votes = i.votes + 1;
-            const history =
-              i.votes < 50 && votes >= 50
-                ? [...i.history, { date: DEMO_TODAY, text: `Passed 50 neighbors · flagged to ${DISTRICT}` }]
-                : i.history;
-            return { ...i, votes, votesThisWeek: i.votesThisWeek + 1, history };
-          }),
+          me: { ...s.me, voted: [...s.me.voted, id] },
+          issues: s.issues.map((i) => (i.id === id ? { ...i, votes: i.votes + 1, votesThisWeek: i.votesThisWeek + 1 } : i)),
         }));
+        return run(() => b.vote(id), { name: 'vote', issueId: id, props: source ? { source } : undefined });
       },
 
-      follow: (id) => {
-        if (state.following.includes(id)) return;
-        setState((s) => ({ ...s, following: [...s.following, id] }));
-        updateIssue(id, (i) => ({ ...i, following: i.following + 1 }));
+      follow: (id, contact) => {
+        const already = snapshot.me.following.includes(id);
+        if (!already) {
+          patch(id, (s) => ({
+            ...s,
+            me: { ...s.me, following: [...s.me.following, id] },
+            issues: s.issues.map((i) => (i.id === id ? { ...i, following: i.following + 1 } : i)),
+          }));
+        }
+        return run(() => b.follow(id, contact), {
+          name: 'follow',
+          issueId: id,
+          props: { contact: contact?.email ? 'email' : contact?.phone ? 'phone' : 'none' },
+        });
       },
 
-      addIssue: (draft) => {
-        const id = `PP-${state.nextId}`;
-        const issue: Issue = {
-          ...draft,
-          id,
-          status: 'open',
-          votes: 1,
-          votesThisWeek: 1,
-          createdAt: DEMO_TODAY,
-          owner: null,
-          updates: [],
-          history: [{ date: DEMO_TODAY, text: `Pinned via ${draft.via}` }],
-          following: 1,
-          duplicatesMerged: 0,
-          confirmedFixed: 0,
-          isUserReport: true,
-        };
-        setState((s) => ({
-          ...s,
-          issues: [issue, ...s.issues],
-          voted: [...s.voted, id],
-          following: [...s.following, id],
-          nextId: s.nextId + 1,
-        }));
-        setLastCreatedId(id);
-        return id;
+      addIssue: async (draft, photos = []) => {
+        try {
+          const urls = await Promise.all(photos.map((p) => b.uploadPhoto(p)));
+          const id = await b.createIssue({ ...draft, photos: urls });
+          b.track({ name: 'pin_submit', issueId: id, scanCode: draft.scanCode, props: { category: draft.category, photos: photos.length } });
+          setLastCreatedId(id);
+          await reload(b);
+          return id;
+        } catch (error) {
+          toast(message(error));
+          return null;
+        }
       },
 
-      addComment: (id, text) =>
-        updateIssue(id, (i) => ({
-          ...i,
-          updates: [...i.updates, { id: crypto.randomUUID(), author: 'You', role: 'resident', text, date: DEMO_TODAY }],
-        })),
+      addComment: (id, text) => run(() => b.comment(id, text), { name: 'comment', issueId: id }),
+      confirmFix: (id, answer) => run(() => b.confirmFix(id, answer), { name: 'confirm_fix', issueId: id, props: { answer } }),
 
       postUpdate: (id, text, status) =>
-        updateIssue(id, (i) => {
-          const changed = status && status !== i.status;
-          return {
-            ...i,
-            status: status ?? i.status,
-            fixedOn: status === 'fixed' ? DEMO_TODAY : i.fixedOn,
-            updates: [...i.updates, partnerUpdate(text)],
-            history: changed
-              ? [...i.history, { date: DEMO_TODAY, text: `Status changed to ${STATUSES[status].label}` }]
-              : i.history,
-          };
-        }),
-
-      setStatus: (id, status) =>
-        updateIssue(id, (i) => ({
-          ...i,
-          status,
-          fixedOn: status === 'fixed' ? DEMO_TODAY : i.fixedOn,
-          history: [
-            ...i.history,
-            {
-              date: DEMO_TODAY,
-              text: status === 'fixed' ? `Marked fixed by ${i.owner ?? DISTRICT}` : `Status changed to ${STATUSES[status].label}`,
-            },
-          ],
-        })),
-
-      assign: (id, owner) =>
-        updateIssue(id, (i) => ({
-          ...i,
-          owner,
-          status: i.status === 'open' && owner ? 'in_review' : i.status,
-          history: [...i.history, { date: DEMO_TODAY, text: owner ? `Assigned to ${owner}` : 'Unassigned' }],
-        })),
-
-      sendToCity: (id) =>
-        updateIssue(id, (i) => {
-          const agency = i.agency ?? 'NYC 311';
-          const sr = `311-${21900000 + Math.floor(Math.random() * 99999)}`;
-          return {
-            ...i,
-            status: 'sent_to_city',
-            owner: agency,
-            cityRequest: { sr, agency, routedTo: agency, sentOn: DEMO_TODAY, sentBy: 'Maya Ruiz' },
-            history: [...i.history, { date: DEMO_TODAY, text: `Sent to NYC 311 · SR ${sr}` }],
-            updates: [
-              ...i.updates,
-              partnerUpdate(
-                `This is ${agency}'s responsibility, so we filed it with 311 (SR ${sr}) with ${i.votes} neighbors attached. We'll keep following up.`,
-              ),
-            ],
-          };
-        }),
-
-      nudgeCity: (id) =>
-        updateIssue(id, (i) => ({
-          ...i,
-          cityRequest: i.cityRequest ? { ...i.cityRequest, lastFollowUp: DEMO_TODAY } : i.cityRequest,
-          history: [...i.history, { date: DEMO_TODAY, text: `Followed up with the City, ${i.votes} neighbors attached` }],
-        })),
-
-      confirmFix: (id, answer) => {
-        setState((s) => ({ ...s, confirmed: { ...s.confirmed, [id]: answer } }));
-        updateIssue(id, (i) =>
-          answer === 'yes'
-            ? { ...i, confirmedFixed: i.confirmedFixed + 1, history: [...i.history, { date: DEMO_TODAY, text: 'A neighbor confirmed the fix' }] }
-            : { ...i, history: [...i.history, { date: DEMO_TODAY, text: 'A neighbor says it is still not fixed' }] },
-        );
+        run(() => b.postUpdate(id, text, status), { name: 'staff_update', issueId: id, props: status ? { status } : undefined }),
+      setStatus: (id, status) => run(() => b.setStatus(id, status), { name: 'staff_status', issueId: id, props: { status } }),
+      assign: (id, owner) => run(() => b.assign(id, owner), { name: 'staff_assign', issueId: id, props: { assigned: Boolean(owner) } }),
+      sendToCity: (id, request) => run(() => b.sendToCity(id, request), { name: 'staff_send_to_city', issueId: id }),
+      nudgeCity: (id) => run(() => b.nudgeCity(id), { name: 'staff_nudge', issueId: id }),
+      hideIssue: (id, reason) => run(() => b.hideIssue(id, reason), { name: 'staff_hide', issueId: id }),
+      unhideIssue: (id) => run(() => b.unhideIssue(id)),
+      mergeIssue: (duplicateId, intoId) =>
+        run(() => b.mergeIssue(duplicateId, intoId), { name: 'staff_merge', issueId: intoId, props: { duplicate: duplicateId } }),
+      saveScanPoint: (point) => run(() => b.saveScanPoint(point)),
+      deleteScanPoint: (code) => run(() => b.deleteScanPoint(code)),
+      listEvents: async (since) => {
+        try {
+          return await b.listEvents(since);
+        } catch (error) {
+          toast(message(error));
+          return [];
+        }
       },
+      signIn: (email, password) => run(() => b.signIn(email, password)),
+      signOut: () => run(() => b.signOut()),
 
-      reset: () => {
-        localStorage.removeItem(STORAGE_KEY);
-        setState(initialState());
-        setLastCreatedId(null);
-      },
+      track: (event) => b.track(event),
+      reset: () =>
+        run(async () => {
+          await b.reset?.();
+          setLastCreatedId(null);
+        }),
     };
-  }, [state, lastCreatedId, toastMessage, toast, updateIssue]);
+  }, [backend, snapshot, staff, lastCreatedId, toastMessage, toast, reload]);
 
+  if (loadError) return <StartupScreen error={loadError} />;
+  if (!store) return <StartupScreen />;
   return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
+}
+
+function StartupScreen({ error }: { error?: string }) {
+  return (
+    <div className="grid h-full place-items-center bg-slate-100 p-6 text-center">
+      {error ? (
+        <div className="max-w-sm">
+          <p className="font-semibold">Problem Pins couldn’t load.</p>
+          <p className="mt-1 text-sm text-slate-600">{error}</p>
+          <button onClick={() => window.location.reload()} className="mt-4 font-semibold text-brand">
+            Try again
+          </button>
+        </div>
+      ) : (
+        <p className="font-mono text-xs tracking-wider text-slate-400" role="status">
+          LOADING…
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function useStore() {

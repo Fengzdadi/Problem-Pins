@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Bell, ChevronUp, Plus, Search, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { PhotoThumb, StatusTag } from '../components/ui';
-import { CATEGORIES, CATEGORY_ORDER } from '../data/meta';
+import { CATEGORIES } from '../data/meta';
 import { YOU_ARE_HERE, distanceMeters } from '../data/geo';
 import type { Category, Issue } from '../data/types';
 import { daysBetween, formatMeters } from '../lib/format';
@@ -16,7 +16,7 @@ export function VoteBox({ issue }: { issue: Issue }) {
     <button
       onClick={(e) => {
         e.stopPropagation();
-        vote(issue.id);
+        vote(issue.id, 'map');
       }}
       aria-label={done ? 'You +1’d this' : '+1 this problem'}
       className={`flex w-11 shrink-0 flex-col items-center rounded-lg border py-1.5 text-sm font-semibold transition ${
@@ -30,10 +30,14 @@ export function VoteBox({ issue }: { issue: Issue }) {
 }
 
 export default function MapHome() {
-  const { issues, voted, confirmed, lastCreatedId, clearLastCreated } = useStore();
+  const { issues, voted, confirmed, lastCreatedId, clearLastCreated, district, track } = useStore();
   const [category, setCategory] = useState<Category | 'all'>('all');
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    track({ name: 'map_view' });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = issues.filter((i) => i.status !== 'fixed');
   const visible = useMemo(() => {
@@ -74,7 +78,7 @@ export default function MapHome() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search West Chelsea"
+              placeholder={`Search ${district.area}`}
               className="h-11 w-full bg-transparent text-[15px] outline-none placeholder:text-slate-400"
             />
             {query && (
@@ -96,7 +100,7 @@ export default function MapHome() {
           <button className={chip(category === 'all')} onClick={() => setCategory('all')}>
             All <span className="opacity-70">{active.length}</span>
           </button>
-          {CATEGORY_ORDER.map((c) => {
+          {district.categories.map((c) => {
             const count = active.filter((i) => i.category === c).length;
             return (
               <button key={c} className={chip(category === c)} onClick={() => setCategory(category === c ? 'all' : c)}>
