@@ -2,22 +2,47 @@ import { useEffect } from 'react';
 import { Check, ChevronUp } from 'lucide-react';
 import { Logo, PhotoThumb, StatusTag } from '../components/ui';
 import { CATEGORIES } from '../data/meta';
-import { daysBetween } from '../lib/format';
+import { distanceMeters } from '../data/geo';
+import { daysBetween, formatMeters, shortDate } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
+
+/** How close an open problem must be to show as "nearby" when the poster has no linked problem. */
+const NEARBY_METERS = 150;
+
+let lastView = { code: '', at: 0 };
 
 /** Where a printed QR code lands. `source` is "qr" when the visit came through the short link. */
 export default function ScanLanding({ code, source }: { code: string; source: string | null }) {
   const store = useStore();
   const { district, track } = store;
   const point = store.scanPoints.find((p) => p.code === code);
-  const linked = point?.issueId ? store.getIssue(point.issueId) : undefined;
+  const found = point?.issueId ? store.getIssue(point.issueId) : undefined;
+  // A hidden issue (spam, off-topic) counts as no linked issue. In the demo, staff can see hidden ones.
+  const linked = found?.hidden ? undefined : found;
   // Follow a merge so the poster keeps working after staff dedupe the problem.
-  const issue = linked?.mergedInto ? store.getIssue(linked.mergedInto) : linked;
+  const merged = Boolean(linked?.mergedInto);
+  const target = linked?.mergedInto ? store.getIssue(linked.mergedInto) : linked;
+  const issue = target?.hidden ? undefined : target;
+  // Lets the experiments panel attribute +1s to this poster.
+  const voteSource = `scan:${code}`;
+  // With nothing linked, offer open problems close by so people +1 instead of pinning a duplicate.
+  const nearby = issue || !point
+    ? []
+    : store.issues
+        .filter((i) => i.status !== 'fixed')
+        .map((i) => ({ issue: i, d: distanceMeters(point, i) }))
+        .filter((n) => n.d <= NEARBY_METERS)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 3);
   const voted = issue ? store.voted.includes(issue.id) : false;
   const known = Boolean(point);
 
   useEffect(() => {
+    // Count one view per visit: React's StrictMode (dev) runs effects twice on mount.
+    const now = Date.now();
+    if (lastView.code === code && now - lastView.at < 1000) return;
+    lastView = { code, at: now };
     track({ name: 'scan_view', scanCode: code, props: { src: source ?? 'link', known } });
   }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -48,7 +73,38 @@ export default function ScanLanding({ code, source }: { code: string; source: st
       <h1 className="mt-1 text-2xl font-bold">{point.name}</h1>
       <p className="text-slate-600">{point.detail}</p>
 
-      {issue && (
+      {merged && issue && (
+        <p className="mt-5 text-sm text-slate-600">
+          The problem reported here (<span className="font-mono">{linked!.id}</span>) was combined with a matching report, so votes
+          count in one place.
+        </p>
+      )}
+
+      {issue && issue.status === 'fixed' ? (
+        <div className="mt-5 rounded-xl border border-slate-200 p-4">
+          <p className="font-mono text-[11px] tracking-wider text-slate-500">REPORTED HERE · FIXED</p>
+          <div className="mt-2 flex gap-3">
+            <div className="flex-1">
+              <p className="text-lg font-semibold leading-snug">{issue.title}</p>
+              <p className="mt-2 text-sm text-slate-500">
+                <StatusTag status="fixed" resident className="text-ink" />
+                {issue.fixedOn && <> on {shortDate(issue.fixedOn)}</>}
+                {issue.confirmedFixed > 0 && (
+                  <>
+                    {' '}
+                    · {issue.confirmedFixed} neighbor{issue.confirmedFixed === 1 ? '' : 's'} confirmed
+                  </>
+                )}
+              </p>
+            </div>
+            <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />
+          </div>
+          <p className="mt-3 text-sm text-slate-600">If it’s broken again, pin it below so {district.name} sees it.</p>
+          <button onClick={() => navigate(`/i/${issue.id}`)} className="mt-3 w-full text-center font-semibold text-brand">
+            See the fix
+          </button>
+        </div>
+      ) : issue ? (
         <div className="mt-5 rounded-xl border border-slate-200 p-4">
           <p className="font-mono text-[11px] tracking-wider text-slate-500">ALREADY REPORTED HERE</p>
           <div className="mt-2 flex gap-3">
@@ -67,7 +123,7 @@ export default function ScanLanding({ code, source }: { code: string; source: st
             </div>
           ) : (
             <button
-              onClick={() => store.vote(issue.id, 'scan')}
+              onClick={() => store.vote(issue.id, voteSource)}
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 font-semibold text-white hover:bg-brand-dark"
             >
               <ChevronUp className="h-5 w-5" strokeWidth={2.5} /> +1 This is my problem too
@@ -77,13 +133,49 @@ export default function ScanLanding({ code, source }: { code: string; source: st
             See what’s happening with it
           </button>
         </div>
+      ) : (
+        nearby.length > 0 && (
+          <div className="mt-5">
+            <p className="font-mono text-[11px] tracking-wider text-slate-500">ALREADY REPORTED NEARBY</p>
+            <ul className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200">
+              {nearby.map(({ issue: i, d }) => {
+                const mine = store.voted.includes(i.id);
+                return (
+                  <li key={i.id} className="flex items-center gap-3 px-3 py-2.5">
+                    <button onClick={() => navigate(`/i/${i.id}`)} className="min-w-0 flex-1 text-left">
+                      <p className="truncate font-medium">{i.title}</p>
+                      <p className="text-xs text-slate-500">
+                        {i.votes} neighbors · {formatMeters(d)} away
+                      </p>
+                    </button>
+                    <button
+                      onClick={() => store.vote(i.id, voteSource)}
+                      disabled={mine}
+                      className={`shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold ${
+                        mine ? 'bg-brand-soft text-brand' : 'border border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {mine ? '+1’d' : '+1'}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )
       )}
 
-      <div className="my-5 flex items-center gap-3 text-sm text-slate-500">
-        <span className="h-px flex-1 bg-slate-200" /> or report something else here <span className="h-px flex-1 bg-slate-200" />
-      </div>
+      {issue || nearby.length > 0 ? (
+        <div className="my-5 flex items-center gap-3 text-sm text-slate-500">
+          <span className="h-px flex-1 bg-slate-200" />
+          {issue?.status === 'fixed' ? 'broken again, or something else?' : 'or report something else here'}
+          <span className="h-px flex-1 bg-slate-200" />
+        </div>
+      ) : (
+        <p className="mb-3 mt-6 font-semibold">What’s the problem here?</p>
+      )}
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {district.categories.map((c) => (
           <button
             key={c}
