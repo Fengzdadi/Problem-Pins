@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import { SlidersHorizontal, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { CategoryTag, SampleBadge, StatusTag } from '../components/ui';
-import { CATEGORIES, CATEGORY_ORDER, STATUSES, STATUS_ORDER } from '../data/meta';
+import { CATEGORIES, STATUSES, STATUS_ORDER } from '../data/meta';
 import type { Category, Status } from '../data/types';
 import { daysBetween, shortDate } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
 import { ActionButton, attentionFor } from './actions';
+import { useMediaQuery } from './useMediaQuery';
 
 const AGE_OPTIONS = [
   { label: 'Any', days: 0 },
@@ -18,12 +19,16 @@ const AGE_OPTIONS = [
 
 export default function OrgMap() {
   const { issues, district } = useStore();
-  const [categories, setCategories] = useState<Category[]>(CATEGORY_ORDER);
+  const [categories, setCategories] = useState<Category[]>(district.categories);
   const [statuses, setStatuses] = useState<Status[]>(['open', 'in_review', 'scheduled', 'sent_to_city']);
   const [minAge, setMinAge] = useState(0);
   const [sizeByVotes, setSizeByVotes] = useState(true);
   const [mode, setMode] = useState<'pins' | 'heat'>('pins');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Phones: the filter panel covers the map, so it opens on demand.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Phones pinch to zoom; the +/- buttons would sit under the Filters button.
+  const wide = useMediaQuery('(min-width: 768px)');
 
   const visible = issues.filter(
     (i) => categories.includes(i.category) && statuses.includes(i.status) && daysBetween(i.createdAt) >= minAge,
@@ -45,26 +50,42 @@ export default function OrgMap() {
         onSelect={(i) => setSelectedId(i.id)}
         sizeByVotes={sizeByVotes}
         heat={mode === 'heat'}
-        zoomControl
+        zoomControl={wide}
       />
 
-      <div className="absolute left-4 top-4 z-[1000] w-[250px] rounded-xl border border-slate-200 bg-white text-sm shadow-lg">
+      <button
+        onClick={() => setFiltersOpen(true)}
+        className={`absolute left-3 top-3 z-[1000] flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm md:hidden ${
+          filtersOpen ? 'hidden' : ''
+        }`}
+      >
+        <SlidersHorizontal className="h-4 w-4" /> Filters · {visible.length}
+      </button>
+
+      <div
+        className={`absolute inset-x-3 top-3 z-[1001] max-h-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white text-sm shadow-lg md:inset-x-auto md:left-4 md:top-4 md:block md:w-[250px] ${
+          filtersOpen ? '' : 'hidden'
+        }`}
+      >
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
           <h2 className="font-semibold">Filters</h2>
           <button
-            className="text-brand"
+            className="ml-auto mr-3 text-brand md:mr-0"
             onClick={() => {
-              setCategories(CATEGORY_ORDER);
+              setCategories(district.categories);
               setStatuses(['open', 'in_review', 'scheduled', 'sent_to_city']);
               setMinAge(0);
             }}
           >
             Reset
           </button>
+          <button onClick={() => setFiltersOpen(false)} aria-label="Close filters" className="md:hidden">
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <div className="border-b border-slate-100 px-4 py-3">
           <p className="mb-2 font-mono text-[10px] tracking-wider text-slate-500">CATEGORY</p>
-          {CATEGORY_ORDER.map((c) => (
+          {district.categories.map((c) => (
             <button key={c} onClick={() => toggle(categories, c, setCategories)} className="flex w-full items-center gap-2 py-1">
               <span className={checkbox(categories.includes(c))}>{categories.includes(c) && '✓'}</span>
               <span className="h-2 w-2 rounded-[2px]" style={{ background: CATEGORIES[c].color }} />
@@ -104,7 +125,7 @@ export default function OrgMap() {
         </div>
       </div>
 
-      <div className="absolute right-4 top-4 z-[1000] flex items-center gap-3">
+      <div className="absolute right-3 top-3 z-[1000] flex items-center gap-3 md:right-4 md:top-4">
         <SampleBadge />
         <div className="flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm shadow-sm">
           {(['pins', 'heat'] as const).map((m) => (
@@ -120,7 +141,7 @@ export default function OrgMap() {
       </div>
 
       {selected && (
-        <div className="absolute right-4 top-20 z-[1000] w-[320px] rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+        <div className="absolute inset-x-3 bottom-3 z-[1000] rounded-xl border border-slate-200 bg-white p-4 shadow-xl md:inset-x-auto md:bottom-auto md:right-4 md:top-20 md:w-[320px]">
           <div className="flex justify-between font-mono text-[10px] tracking-wider text-slate-500">
             <span>
               {selected.id} · {selected.locationLabel.toUpperCase()}
@@ -150,7 +171,7 @@ export default function OrgMap() {
               <p className="truncate font-semibold">{selected.owner ?? '—'}</p>
               {selected.cityRequest && (
                 <p className="text-[11px] text-brand">
-                  no reply {daysBetween(selected.cityRequest.lastFollowUp ?? selected.cityRequest.sentOn)}d
+                  no follow-up {daysBetween(selected.cityRequest.lastFollowUp ?? selected.cityRequest.sentOn)}d
                 </p>
               )}
             </div>
@@ -171,7 +192,7 @@ export default function OrgMap() {
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 z-[1000] flex gap-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs shadow-sm">
+      <div className="absolute bottom-4 left-4 z-[1000] hidden gap-4 rounded-lg md:flex border border-slate-200 bg-white px-4 py-2 text-xs shadow-sm">
         {STATUS_ORDER.map((s) => (
           <StatusTag key={s} status={s} />
         ))}
