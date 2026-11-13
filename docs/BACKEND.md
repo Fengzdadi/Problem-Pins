@@ -107,6 +107,18 @@ and removes them afterwards, so the sample data is untouched. It covers RLS (no 
 contacts for residents, one vote per device, no staff actions for residents, no cross-district
 staff access) and the main RPCs, uploads and Realtime.
 
+## Changing the schema
+
+```
+supabase migration new add_something    # creates supabase/migrations/<timestamp>_add_something.sql
+supabase db reset                       # applies everything to the local stack
+```
+
+For a new table: enable RLS, `revoke all ... from anon, authenticated` (the local stack grants
+everything on new tables by default, hosted projects don't), then grant only what its policies
+need. New functions are executable by everyone until you revoke that. Regenerate the seed if the
+sample data needs the change, and push to hosted projects as below.
+
 ## Staff accounts
 
 Staff rights come only from the `staff` table. Supabase can't turn off email sign-ups without
