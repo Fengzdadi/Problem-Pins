@@ -1,4 +1,5 @@
 import { DEMO_DISTRICT, DEMO_SCAN_POINTS } from '../data/demoDistrict';
+import { DEMO_EVENTS } from '../data/demoEvents';
 import { STATUSES } from '../data/meta';
 import { SAMPLE_ISSUES } from '../data/sampleData';
 import type {
@@ -57,7 +58,7 @@ function initialState(): DemoState {
     me: { voted: [], following: [], confirmed: {} },
     contacts: {},
     nextId: 2461,
-    events: [],
+    events: structuredClone(DEMO_EVENTS),
     staffSignedIn: true,
   };
 }
