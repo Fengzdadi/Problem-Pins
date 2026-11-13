@@ -140,6 +140,8 @@ export interface FunnelRow {
   pinSubmits: number;
   /** +1s given on the scan page. */
   votes: number;
+  /** New York day of the first QR scan in the data, to measure scans per week from then. */
+  firstQrScan: string | null;
 }
 
 /** Which scan point a `vote` event came from: `source` is `scan:Q-12` (or plain `scan`). */
@@ -159,7 +161,7 @@ export function scanFunnels(events: AnalyticsEvent[], points: ScanPoint[]): Funn
     let r = rows.get(code);
     if (!r) {
       const point = points.find((p) => p.code === code);
-      r = { code, name: point?.name ?? null, qrScans: 0, otherVisits: 0, pinStarts: 0, pinSubmits: 0, votes: 0 };
+      r = { code, name: point?.name ?? null, qrScans: 0, otherVisits: 0, pinStarts: 0, pinSubmits: 0, votes: 0, firstQrScan: null };
       rows.set(code, r);
     }
     return r;
@@ -174,15 +176,19 @@ export function scanFunnels(events: AnalyticsEvent[], points: ScanPoint[]): Funn
     }
     if (!e.scanCode) continue;
     if (e.name === 'scan_view') {
-      if (e.props?.src === 'qr') row(e.scanCode).qrScans += 1;
-      else row(e.scanCode).otherVisits += 1;
+      if (e.props?.src === 'qr') {
+        const r = row(e.scanCode);
+        r.qrScans += 1;
+        const day = eventDay(e);
+        if (!r.firstQrScan || day < r.firstQrScan) r.firstQrScan = day;
+      } else row(e.scanCode).otherVisits += 1;
     } else if (e.name === 'pin_start') row(e.scanCode).pinStarts += 1;
     else if (e.name === 'pin_submit') row(e.scanCode).pinSubmits += 1;
   }
   return [...rows.values()].sort((a, b) => b.qrScans - a.qrScans || a.code.localeCompare(b.code, 'en', { numeric: true }));
 }
 
-export function funnelTotals(rows: FunnelRow[]): Omit<FunnelRow, 'code' | 'name'> {
+export function funnelTotals(rows: FunnelRow[]): Omit<FunnelRow, 'code' | 'name' | 'firstQrScan'> {
   return rows.reduce(
     (t, r) => ({
       qrScans: t.qrScans + r.qrScans,
@@ -193,6 +199,17 @@ export function funnelTotals(rows: FunnelRow[]): Omit<FunnelRow, 'code' | 'name'
     }),
     { qrScans: 0, otherVisits: 0, pinStarts: 0, pinSubmits: 0, votes: 0 },
   );
+}
+
+/**
+ * QR scans per week for one poster, from its first scan (or `from`, if later) to `to`, both
+ * inclusive. Null before the poster's first scan, so a new poster isn't shown as zero.
+ */
+export function scansPerWeek(row: Pick<FunnelRow, 'qrScans' | 'firstQrScan'>, from: string, to: string) {
+  if (!row.firstQrScan) return null;
+  const start = row.firstQrScan > from ? row.firstQrScan : from;
+  const days = daysBetween(start, to) + 1;
+  return (row.qrScans / days) * 7;
 }
 
 export const RESIDENT_EVENTS: { name: AnalyticsEventName; label: string }[] = [

@@ -15,6 +15,7 @@ import {
   reportMonths,
   residentActivity,
   scanFunnels,
+  scansPerWeek,
   shiftMonth,
   staffResponse,
 } from './metrics';
@@ -111,7 +112,9 @@ describe('scanFunnels', () => {
   it('builds one row per point, including retired codes seen in events', () => {
     const rows = scanFunnels(events, points);
     expect(rows.map((r) => r.code)).toEqual(['Q-1', 'Q-0', 'Q-2']);
-    expect(rows[0]).toEqual({ code: 'Q-1', name: 'Board', qrScans: 2, otherVisits: 1, pinStarts: 1, pinSubmits: 1, votes: 2 });
+    expect(rows[0]).toEqual({ code: 'Q-1', name: 'Board', qrScans: 2, otherVisits: 1, pinStarts: 1, pinSubmits: 1, votes: 2, firstQrScan: '2026-10-01' });
+    expect(scansPerWeek(rows[0], '2026-09-01', '2026-10-07')).toBe(2); // 2 scans over 7 days
+    expect(scansPerWeek(rows[2], '2026-09-01', '2026-10-07')).toBeNull();
     expect(rows[1].name).toBeNull();
     expect(rows[2]).toMatchObject({ qrScans: 0, votes: 0 });
     expect(funnelTotals(rows)).toEqual({ qrScans: 3, otherVisits: 1, pinStarts: 1, pinSubmits: 1, votes: 2 });
