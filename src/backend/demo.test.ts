@@ -108,11 +108,12 @@ describe('DemoBackend', () => {
   });
 
   it('records analytics events on the demo date', async () => {
+    const seeded = (await backend.listEvents('2026-10-14')).length; // the demo event seed
     backend.track({ name: 'scan_view', scanCode: 'Q-12' });
     const events = await backend.listEvents('2026-10-14');
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ name: 'scan_view', scanCode: 'Q-12' });
-    expect(events[0].at.startsWith('2026-10-14T')).toBe(true);
+    expect(events).toHaveLength(seeded + 1);
+    expect(events.at(-1)).toMatchObject({ name: 'scan_view', scanCode: 'Q-12' });
+    expect(events.at(-1)!.at.startsWith('2026-10-14T')).toBe(true);
   });
 
   it('keeps follow contacts private', async () => {
