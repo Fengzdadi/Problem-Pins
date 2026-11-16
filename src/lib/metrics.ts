@@ -67,6 +67,10 @@ export interface MonthReport {
   /** Fixed this month and confirmed by at least one resident. */
   confirmed: number;
   medianDaysToFix: number | null;
+  /** Issues whose 311 request was filed this month. */
+  sentToCity: number;
+  /** Of those, how many are still waiting on the City. */
+  sentStillWaiting: number;
   byCategory: CategoryFigures[];
   /** Most-pinned category this month (ties: the order of `categories`). */
   topCategory: { category: Category; pinned: number } | null;
@@ -83,6 +87,7 @@ export function monthReport(issues: Issue[], month: string, today: string, categ
   const counted = issues.filter((i) => !i.hidden);
   const pinned = counted.filter((i) => inMonth(i.createdAt));
   const fixed = counted.filter((i) => !i.mergedInto && i.status === 'fixed' && inMonth(i.fixedOn));
+  const sent = counted.filter((i) => !i.mergedInto && inMonth(i.cityRequest?.sentOn));
   const days = (list: Issue[]) => list.map((i) => daysBetween(i.createdAt, i.fixedOn));
 
   const byCategory = categories.map((category) => {
@@ -106,10 +111,39 @@ export function monthReport(issues: Issue[], month: string, today: string, categ
     fixed: fixed.length,
     confirmed: fixed.filter((i) => i.confirmedFixed > 0).length,
     medianDaysToFix: fixed.length ? median(days(fixed)) : null,
+    sentToCity: sent.length,
+    sentStillWaiting: sent.filter((i) => i.status === 'sent_to_city').length,
     byCategory,
     topCategory: top ? { category: top.category, pinned: top.pinned } : null,
     hidden: issues.filter((i) => i.hidden && inMonth(i.createdAt)).length,
   };
+}
+
+// ---------- waiting on the City ----------
+
+export interface AgencyGroup {
+  agency: string;
+  /** Longest wait first. `days` runs from the day the 311 request was sent, or from the pin when nothing is filed yet. */
+  rows: { issue: Issue; days: number }[];
+}
+
+/**
+ * What is waiting on the City today, one group per agency: the agency with the most issues
+ * first, then by name (the order of `cityFigures().byAgency`). Includes issues that name an
+ * agency but have no 311 request yet.
+ */
+export function waitingByAgency(issues: Issue[], today: string): AgencyGroup[] {
+  const groups = new Map<string, AgencyGroup['rows']>();
+  for (const issue of issues) {
+    if (issue.hidden || issue.mergedInto) continue;
+    if (issue.status !== 'sent_to_city' && !(issue.agency && !issue.cityRequest && issue.status !== 'fixed')) continue;
+    const agency = issue.cityRequest?.agency ?? issue.agency ?? 'No agency named';
+    const days = daysBetween(issue.cityRequest?.sentOn ?? issue.createdAt, today);
+    groups.set(agency, [...(groups.get(agency) ?? []), { issue, days }]);
+  }
+  return [...groups]
+    .map(([agency, rows]) => ({ agency, rows: rows.sort((a, b) => b.days - a.days || a.issue.id.localeCompare(b.issue.id)) }))
+    .sort((a, b) => b.rows.length - a.rows.length || a.agency.localeCompare(b.agency));
 }
 
 // ---------- events ----------
@@ -222,6 +256,8 @@ export const RESIDENT_EVENTS: { name: AnalyticsEventName; label: string }[] = [
   { name: 'follow', label: 'Follows' },
   { name: 'comment', label: 'Comments' },
   { name: 'confirm_fix', label: 'Fix confirmations' },
+  { name: 'share', label: 'Shares' },
+  { name: 'report', label: 'Pins reported' },
 ];
 
 /** Resident events by type, plus where pins started (QR vs map). */

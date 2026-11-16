@@ -7,7 +7,10 @@ const corner = (street: number, ave: number): [number, number] => {
   return [p.lng, p.lat];
 };
 
-/** The fictional BID the demo is set in. Live deployments load their district from the backend. */
+/**
+ * The fictional district office the demo is set in. The name, area and boundary are placeholders
+ * until the pilot district is confirmed. Live deployments load their district from the backend.
+ */
 export const DEMO_DISTRICT: District = {
   id: 'west-side-demo',
   name: 'West Side District',
@@ -20,14 +23,15 @@ export const DEMO_DISTRICT: District = {
     coordinates: [[corner(13, -1), corner(23, -1), corner(23, 2), corner(13, 2), corner(13, -1)]],
   },
   categories: CATEGORY_ORDER,
-  teams: ['BID crew', 'West Side District staff'],
-  rules: { reviewVotes: 50, reviewDays: 30, forwardVotes: 25, cityNoReplyDays: 10 },
+  teams: ['District office staff'],
+  rules: { cityNoReplyDays: 10, quietDays: 14 },
+  contactEmail: 'office@westside.example',
 };
 
 export const DEMO_SCAN_POINTS: ScanPoint[] = [
   {
     code: 'Q-12',
-    name: 'BID noticeboard, W 16th St',
+    name: 'Community noticeboard, W 16th St',
     detail: 'Between 9th and 10th Ave',
     ...at(16, 0.45),
     issueId: 'PP-2402',

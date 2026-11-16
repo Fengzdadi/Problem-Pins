@@ -1,81 +1,61 @@
-import { useState } from 'react';
-import { Send } from 'lucide-react';
-import type { AttentionRules, Issue } from '../data/types';
-import { daysBetween } from '../lib/format';
+import { ExternalLink, Send } from 'lucide-react';
+import { linkClass } from '../components/ui';
+import { navigate } from '../router';
 import { useStore } from '../store';
-import { ForwardToCityDialog } from './ForwardToCity';
+import type { TodoItem } from './dashboard';
 
-export type Attention = 'nudge' | 'assign' | 'forward';
+export const CHECK_311 = 'https://portal.311.nyc.gov/check-status/';
 
-export function attentionRule(rules: AttentionRules) {
-  return `Rule: flag anything with ${rules.reviewVotes}+ votes or ${rules.reviewDays}+ days and no owner, City-owned problems with ${rules.forwardVotes}+ votes not yet sent to 311, and City requests with ${rules.reviewVotes}+ votes and no follow-up in ${rules.cityNoReplyDays}+ days`;
+/** 311's status page asks for the SR number, so links to it copy the number on the way. */
+export function copySr(sr: string, toast: (message: string) => void) {
+  navigator.clipboard?.writeText(sr).then(
+    () => toast(`Copied ${sr}`),
+    () => {},
+  );
 }
 
-export function attentionFor(issue: Issue, rules: AttentionRules): Attention | null {
-  if (issue.status === 'fixed') return null;
-  if (issue.status === 'sent_to_city' && issue.cityRequest) {
-    const since = issue.cityRequest.lastFollowUp ?? issue.cityRequest.sentOn;
-    return issue.votes >= rules.reviewVotes && daysBetween(since) >= rules.cityNoReplyDays ? 'nudge' : null;
-  }
-  if (issue.agency && !issue.cityRequest && issue.votes >= rules.forwardVotes) return 'forward';
-  if (!issue.owner && (issue.votes >= rules.reviewVotes || daysBetween(issue.createdAt) >= rules.reviewDays)) return 'assign';
-  return null;
-}
+/**
+ * What to do about a to-do item: log a City follow-up right here, or open the issue to review reports, respond, reply or post an update.
+ * `relative` keeps it above a row whose title link is stretched over the whole row.
+ */
+export function TodoAction({ item, block = false }: { item: TodoItem; block?: boolean }) {
+  const { nudgeCity, toast } = useStore();
+  const { issue, kind } = item;
+  const button = `relative flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold hover:border-slate-300 ${
+    block ? 'flex-1' : ''
+  }`;
 
-export function attentionReason(issue: Issue) {
-  const days = daysBetween(issue.createdAt);
-  const req = issue.cityRequest;
-  if (req) {
-    const since = req.lastFollowUp ?? req.sentOn;
-    return `City-owned · sent to 311 · no follow-up in ${daysBetween(since)} days · ${issue.votes} votes`;
-  }
-  if (issue.agency) return `+${issue.votesThisWeek} votes this week · ${issue.agency} handles this, not the District`;
-  return `Open ${days} days · no owner · ${issue.votes} votes`;
-}
-
-export function ActionButton({ issue, kind, size = 'md' }: { issue: Issue; kind: Attention; size?: 'sm' | 'md' }) {
-  const { nudgeCity, assign, toast, district } = useStore();
-  const [forwarding, setForwarding] = useState(false);
-  const team = district.teams[0];
-  const pad = size === 'sm' ? 'px-3 py-1.5 text-xs' : 'px-3.5 py-2 text-sm';
-  if (kind === 'nudge')
+  if (kind === 'city' && issue.cityRequest) {
+    const { sr } = issue.cityRequest;
     return (
-      <button
-        onClick={async (e) => {
-          e.stopPropagation();
-          if (await nudgeCity(issue.id)) toast(`Follow-up on ${issue.cityRequest?.sr} recorded`);
-        }}
-        title="Record that you followed up with the City"
-        className={`flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-brand font-semibold text-white hover:bg-brand-dark ${pad}`}
-      >
-        <Send className="h-3.5 w-3.5" /> Log follow-up
-      </button>
-    );
-  if (kind === 'forward')
-    return (
-      <>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setForwarding(true);
-          }}
-          className={`flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white font-semibold hover:border-slate-300 ${pad}`}
+      <div className={`relative flex shrink-0 items-center gap-3 ${block ? 'w-full' : ''}`}>
+        <a
+          href={CHECK_311}
+          target="_blank"
+          rel="noreferrer"
+          title="Opens NYC 311’s status page and copies the SR number"
+          onClick={() => copySr(sr, toast)}
+          className={`inline-flex items-center gap-1 whitespace-nowrap text-sm ${linkClass}`}
         >
-          <Send className="h-3.5 w-3.5" /> Forward to City
+          Check 311 <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+        <button
+          onClick={async () => {
+            if (await nudgeCity(issue.id)) toast(`Follow-up on ${sr} recorded`);
+          }}
+          title="Record that you followed up with the City"
+          className={button}
+        >
+          <Send className="h-3.5 w-3.5" /> Log follow-up
         </button>
-        {forwarding && <ForwardToCityDialog issue={issue} onClose={() => setForwarding(false)} />}
-      </>
+      </div>
     );
+  }
+
+  const label = kind === 'quiet' ? 'Post update' : kind === 'residents' ? 'Reply' : kind === 'reported' ? 'Review' : 'Respond';
   return (
-    <button
-      onClick={async (e) => {
-        e.stopPropagation();
-        if (await assign(issue.id, team)) toast(`${issue.id} assigned to ${team}`);
-      }}
-      title={`Assign to ${team}`}
-      className={`shrink-0 rounded-lg bg-brand font-semibold text-white hover:bg-brand-dark ${pad}`}
-    >
-      Assign
+    <button onClick={() => navigate(`/org/issues/${issue.id}`)} className={button}>
+      {label}
     </button>
   );
 }

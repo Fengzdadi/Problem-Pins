@@ -1,7 +1,7 @@
 /**
  * Experiment thresholds. These belong to the team, not to the code: each one is `null`
  * until the team agrees a number (and writes down why) before looking at the results.
- * The Reports screen shows `null` as "set by the team".
+ * The Experiments page (`#/org/experiments`) shows `null` as "set by the team".
  *
  * `direction` says which side of the threshold counts as meeting it.
  */

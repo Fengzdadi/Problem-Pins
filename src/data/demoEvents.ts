@@ -155,6 +155,15 @@ function build(): AnalyticsEvent[] {
     if (rand() < 0.25) push({ name: 'scan_view', scanCode: qr.code, props: { src: 'link', known: true }, at: at(day, between(9 * 60, 20 * 60)) });
   }
 
+  // Neighbors saying a fix didn't hold, matching `notFixed`. Fixed times (no random draws),
+  // so the events above stay the same.
+  for (const issue of SAMPLE_ISSUES) {
+    if (!issue.fixedOn) continue;
+    for (let i = 0; i < issue.notFixed; i++) {
+      push({ name: 'confirm_fix', issueId: issue.id, props: { answer: 'no' }, at: at(addDays(issue.fixedOn, 3 + 4 * i), 19 * 60) });
+    }
+  }
+
   return events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 

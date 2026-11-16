@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEMO_STORAGE_KEY, DemoBackend, type KeyValueStorage } from './demo';
+import { DemoBackend, type KeyValueStorage } from './demo';
 import type { NewIssueDraft } from './types';
 
 function memoryStorage(): KeyValueStorage {
@@ -51,17 +51,13 @@ describe('DemoBackend', () => {
     expect((await find('PP-2431')).votes).toBe(before + 1);
   });
 
-  it('logs when an issue passes the review threshold', async () => {
-    // Put PP-2297 one vote short of the 50-vote rule, then vote from this device.
-    await backend.createIssue(draft); // forces a save
-    const saved = JSON.parse(storage.getItem(DEMO_STORAGE_KEY)!);
-    saved.issues.find((i: { id: string }) => i.id === 'PP-2297').votes = 49;
-    storage.setItem(DEMO_STORAGE_KEY, JSON.stringify(saved));
-    backend = new DemoBackend(storage);
-    await backend.vote('PP-2297');
-    const issue = await find('PP-2297');
-    expect(issue.votes).toBe(50);
-    expect(issue.history.at(-1)?.text).toBe('Passed 50 neighbors · flagged to West Side District');
+  it('counts "not fixed" answers until the issue is reopened', async () => {
+    // PP-2362 is marked fixed, and two neighbors already said it isn't.
+    expect((await find('PP-2362')).notFixed).toBe(2);
+    await backend.confirmFix('PP-2362', 'no');
+    expect((await find('PP-2362')).notFixed).toBe(3);
+    await backend.setStatus('PP-2362', 'in_review');
+    expect((await find('PP-2362')).notFixed).toBe(0);
   });
 
   it('persists to storage and reloads', async () => {
@@ -121,9 +117,160 @@ describe('DemoBackend', () => {
     expect(JSON.stringify(await backend.load())).not.toContain('resident@example.org');
   });
 
+  it('takes back a +1, but never the one on your own pin', async () => {
+    const before = await find('PP-2431');
+    await backend.vote('PP-2431');
+    await backend.unvote('PP-2431');
+    await backend.unvote('PP-2431');
+    const after = await find('PP-2431');
+    expect([after.votes, after.votesThisWeek]).toEqual([before.votes, before.votesThisWeek]);
+    expect((await backend.load()).me.voted).not.toContain('PP-2431');
+
+    const mine = await backend.createIssue(draft);
+    await expect(backend.unvote(mine)).rejects.toThrow('You pinned this, so your +1 stays.');
+  });
+
+  it('stops following and forgets the contact', async () => {
+    const before = (await find('PP-2402')).following;
+    await backend.follow('PP-2402', { email: 'resident@example.org' });
+    await backend.unfollow('PP-2402');
+    expect((await find('PP-2402')).following).toBe(before);
+    expect((await backend.load()).me.following).not.toContain('PP-2402');
+    expect(storage.getItem('problem-pins-demo-v5')).not.toContain('resident@example.org');
+  });
+
+  it('deletes only your own notes', async () => {
+    await backend.comment('PP-2440', 'Wrong pin, sorry');
+    const note = (await find('PP-2440')).updates.at(-1)!;
+    await backend.deleteNote('PP-2440', note.id);
+    expect((await find('PP-2440')).updates.some((u) => u.id === note.id)).toBe(false);
+    const someoneElse = (await find('PP-2402')).updates.find((u) => u.role === 'resident')!;
+    await expect(backend.deleteNote('PP-2402', someoneElse.id)).rejects.toThrow('Only the phone that wrote a note can delete it.');
+  });
+
+  it('lets the device that pinned it remove its pin until neighbors +1 it or the office acts', async () => {
+    await expect(backend.removeIssue('PP-2440')).rejects.toThrow('Only the phone that pinned this can remove it.');
+
+    const id = await backend.createIssue(draft);
+    await backend.removeIssue(id);
+    const removed = await find(id);
+    expect(removed).toMatchObject({ hidden: true, hiddenReason: 'Removed by the person who pinned it' });
+    expect(removed.history.at(-1)).toEqual({ date: '2026-10-14', text: 'Removed by the person who pinned it' });
+    await backend.unhideIssue(id); // staff can restore it
+
+    const answered = await backend.createIssue(draft);
+    await backend.assign(answered, 'District office staff');
+    await expect(backend.removeIssue(answered)).rejects.toThrow('West Side District has picked this up, so it stays on the map. You can still add a note.');
+
+    // The demo has one device, so a second +1 stands in for a neighbor's.
+    const popular = await backend.createIssue(draft);
+    const state = JSON.parse(storage.getItem('problem-pins-demo-v5')!);
+    state.issues.find((i: { id: string }) => i.id === popular).votes = 2;
+    storage.setItem('problem-pins-demo-v5', JSON.stringify(state));
+    await expect(new DemoBackend(storage).removeIssue(popular)).rejects.toThrow('Neighbors have +1’d this');
+  });
+
+  it('takes one report per device, shows reports to staff only, and clears them on dismiss or hide', async () => {
+    await backend.reportIssue('PP-2440', 'spam');
+    await backend.reportIssue('PP-2440', 'offensive');
+    expect((await backend.load()).me.reported).toEqual(['PP-2440']);
+    expect((await find('PP-2440')).reports).toEqual({ count: 1, since: '2026-10-14', reasons: [{ reason: 'spam', count: 1 }] });
+
+    await backend.signOut();
+    expect(await find('PP-2440')).not.toHaveProperty('reports');
+    await backend.signIn('maya@example.org', 'x');
+
+    await backend.dismissReports('PP-2440');
+    const kept = await find('PP-2440');
+    expect(kept).not.toHaveProperty('reports');
+    expect(kept.history.at(-1)).toEqual({ date: '2026-10-14', text: 'Kept the pin, dismissed 1 report', staffName: 'Maya Ruiz', staffOnly: true });
+
+    await backend.reportIssue('PP-2431', 'personal_info');
+    await backend.hideIssue('PP-2431', 'Personal information in the text or photo');
+    expect(await find('PP-2431')).not.toHaveProperty('reports');
+  });
+
+  it('records which staff member did each action, for staff only', async () => {
+    await backend.assign('PP-2440', 'District office staff');
+    await backend.postUpdate('PP-2440', 'Looking into it.');
+    const issue = await find('PP-2440');
+    expect(issue.history.at(-1)).toEqual({ date: '2026-10-14', text: 'Assigned to District office staff', staffName: 'Maya Ruiz' });
+    expect(issue.updates.at(-1)).toMatchObject({ role: 'partner', staffName: 'Maya Ruiz' });
+
+    await backend.dismissReports('PP-2440'); // nothing to dismiss: no history line
+    await backend.reportIssue('PP-2440', 'spam');
+    await backend.dismissReports('PP-2440');
+    await backend.signOut();
+    const forResidents = await find('PP-2440');
+    expect(forResidents.history.some((h) => h.staffOnly || h.staffName)).toBe(false);
+    expect(forResidents.updates.some((u) => u.staffName)).toBe(false);
+    expect((await find('PP-2402')).cityRequest).not.toHaveProperty('sentBy');
+  });
+
   it('resets to the sample data', async () => {
     const id = await backend.createIssue(draft);
     await backend.reset();
     expect((await backend.load()).issues.some((i) => i.id === id)).toBe(false);
+  });
+});
+
+describe('DemoBackend resident accounts', () => {
+  const signIn = async (email: string) => {
+    const { demoCode } = await backend.requestResidentCode(email);
+    return backend.verifyResidentCode(email, demoCode!);
+  };
+
+  it('refuses a bad email, a wrong code and a code that was never asked for', async () => {
+    await expect(backend.requestResidentCode('not-an-email')).rejects.toThrow(/email address/);
+    await expect(backend.verifyResidentCode('ana@example.com', '123456')).rejects.toThrow(/new code/);
+    const { demoCode } = await backend.requestResidentCode('ana@example.com');
+    const wrong = demoCode === '000000' ? '111111' : '000000';
+    await expect(backend.verifyResidentCode('ana@example.com', wrong)).rejects.toThrow(/doesn’t match/);
+    expect((await backend.load()).me.account).toBeUndefined();
+  });
+
+  it('keeps what the device did, takes it off on sign-out and brings it back on sign-in', async () => {
+    const pin = await backend.createIssue(draft);
+    await backend.vote('PP-2431');
+    await backend.comment('PP-2431', 'Still out tonight');
+    const votes = (await find('PP-2431')).votes;
+
+    expect(await signIn('Ana@Example.com ')).toEqual({ returning: false });
+    expect((await backend.load()).me.account).toEqual({ email: 'ana@example.com', since: expect.any(String) });
+
+    await backend.signOutResident();
+    let snap = await backend.load();
+    expect(snap.me).toEqual({ voted: [], following: [], confirmed: {}, reported: [] });
+    expect(snap.issues.find((i) => i.id === pin)!.isUserReport).toBeUndefined();
+    expect((await find('PP-2431')).updates.some((u) => u.mine)).toBe(false);
+    expect((await find('PP-2431')).votes).toBe(votes); // the +1 is still counted
+
+    expect(await signIn('ana@example.com')).toEqual({ returning: true });
+    snap = await backend.load();
+    expect(snap.me.voted).toEqual(expect.arrayContaining([pin, 'PP-2431']));
+    expect(snap.issues.find((i) => i.id === pin)!.isUserReport).toBe(true);
+    expect((await find('PP-2431')).updates.some((u) => u.mine)).toBe(true);
+    expect((await find('PP-2431')).votes).toBe(votes);
+  });
+
+  it('counts a person once when the device and the account both +1’d', async () => {
+    await backend.vote('PP-2431');
+    await signIn('ana@example.com');
+    await backend.signOutResident();
+    const votes = (await find('PP-2431')).votes;
+    await backend.vote('PP-2431'); // the signed-out device +1s again
+    expect((await find('PP-2431')).votes).toBe(votes + 1);
+    await signIn('ana@example.com');
+    expect((await find('PP-2431')).votes).toBe(votes);
+  });
+
+  it('forgets the email on delete but leaves the device’s records', async () => {
+    await backend.vote('PP-2431');
+    await signIn('ana@example.com');
+    await backend.deleteResidentAccount();
+    const { me } = await backend.load();
+    expect(me.account).toBeUndefined();
+    expect(me.voted).toContain('PP-2431');
+    expect(await signIn('ana@example.com')).toEqual({ returning: false });
   });
 });

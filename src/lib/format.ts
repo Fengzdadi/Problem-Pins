@@ -41,6 +41,17 @@ export function addDays(date: string, days: number) {
   return t.toISOString().slice(0, 10);
 }
 
+/** `plural(1, 'neighbor')` → "1 neighbor", `plural(3, 'neighbor')` → "3 neighbors". */
+export function plural(n: number, one: string, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Hours as "5.2 h", or days past two days ("3.1 days"); "—" when there's no figure. */
+export function formatHours(h: number | null) {
+  if (h === null) return '—';
+  return h < 48 ? `${h.toFixed(1)} h` : `${(h / 24).toFixed(1)} days`;
+}
+
 export function formatMeters(m: number) {
   return m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
 }

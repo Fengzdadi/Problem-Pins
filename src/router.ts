@@ -23,6 +23,7 @@ export function useRoute() {
       setRoute(current());
       window.scrollTo(0, 0);
       document.getElementById('resident-scroll')?.scrollTo(0, 0);
+      document.getElementById('org-scroll')?.scrollTo(0, 0);
     };
     window.addEventListener('hashchange', onChange);
     return () => window.removeEventListener('hashchange', onChange);

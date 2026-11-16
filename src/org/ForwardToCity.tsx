@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { ExternalLink, Send } from 'lucide-react';
+import { fieldClass as field, linkClass } from '../components/ui';
 import type { Issue } from '../data/types';
+import { plural } from '../lib/format';
 import { useStore } from '../store';
 import Dialog from './Dialog';
 import { normalizeSr } from './triage';
@@ -35,8 +37,6 @@ export function ForwardToCityForm({ issue, onDone, onCancel }: { issue: Issue; o
     }
   };
 
-  const field = 'mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-brand';
-
   return (
     <form
       noValidate
@@ -49,10 +49,10 @@ export function ForwardToCityForm({ issue, onDone, onCancel }: { issue: Issue; o
       <ol className="list-decimal space-y-1 pl-4 text-sm text-slate-600">
         <li>
           File it on{' '}
-          <a href="https://portal.311.nyc.gov/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-medium text-brand">
+          <a href="https://portal.311.nyc.gov/" target="_blank" rel="noreferrer" className={`inline-flex items-center gap-0.5 ${linkClass}`}>
             the NYC 311 portal <ExternalLink className="h-3 w-3" />
           </a>{' '}
-          and mention the {issue.votes} neighbors who reported it.
+          and mention the {plural(issue.votes, 'neighbor')} who reported it.
         </li>
         <li>Enter the service request number 311 gives you, so we can track the reply here.</li>
       </ol>
@@ -79,7 +79,7 @@ export function ForwardToCityForm({ issue, onDone, onCancel }: { issue: Issue; o
           </datalist>
         </label>
         <label className="block text-sm font-medium">
-          Routed to <span className="font-normal text-slate-400">(optional)</span>
+          Routed to <span className="font-normal text-slate-500">(optional)</span>
           <input value={routedTo} onChange={(e) => setRoutedTo(e.target.value)} placeholder="e.g. Street Lighting" className={field} />
         </label>
       </div>
@@ -97,7 +97,8 @@ export function ForwardToCityForm({ issue, onDone, onCancel }: { issue: Issue; o
             Cancel
           </button>
         )}
-        <button disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60">
+        {/* Ink, not orange: the form sits on the issue page, whose one orange button posts the update. */}
+        <button disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-ink px-3.5 py-2 text-sm font-semibold text-white hover:bg-ink/90 disabled:opacity-60">
           <Send className="h-4 w-4" /> {busy ? 'Saving…' : 'Record 311 request'}
         </button>
       </div>
@@ -107,7 +108,15 @@ export function ForwardToCityForm({ issue, onDone, onCancel }: { issue: Issue; o
 
 export function ForwardToCityDialog({ issue, onClose }: { issue: Issue; onClose: () => void }) {
   return (
-    <Dialog title={`Forward “${issue.title}” to the City`} label={`${issue.id} · ${issue.votes} VOTES`} onClose={onClose}>
+    <Dialog
+      title={`Forward “${issue.title}” to the City`}
+      label={
+        <>
+          <span className="font-mono font-normal">{issue.id}</span> · {plural(issue.votes, 'neighbor')}
+        </>
+      }
+      onClose={onClose}
+    >
       <ForwardToCityForm issue={issue} onDone={onClose} onCancel={onClose} />
     </Dialog>
   );

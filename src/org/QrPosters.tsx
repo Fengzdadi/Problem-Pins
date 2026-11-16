@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, Plus, Printer, QrCode, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { Poster, PrintPoster, useQrSvg } from '../components/Poster';
-import { SampleBadge } from '../components/ui';
+import { SampleBadge, fieldClass as field, labelClass } from '../components/ui';
 import { distanceMeters } from '../data/geo';
 import type { AnalyticsEvent, ScanPoint } from '../data/types';
 import { downloadText, downloadUrl } from '../lib/csv';
-import { formatMeters, nyDate, shortDate } from '../lib/format';
+import { formatMeters, nyDate, plural, shortDate } from '../lib/format';
 import { displayLink, qrPng, shortLink } from '../lib/qr';
 import { isValidCode, loadRetiredCodes, nextFreeCode, normalizeCode, retireCode, usedCodes } from '../lib/scanCodes';
 import { useStore } from '../store';
@@ -20,18 +20,27 @@ interface Draft {
   issueId: string;
 }
 
-const label = 'mb-1 block font-mono text-[10px] tracking-wider text-slate-500';
-const input = 'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400';
+const card = 'rounded-xl border border-slate-200 bg-white';
+const optional = 'font-normal text-slate-500';
+const button = 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-slate-300';
+const primary = 'flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-dark';
 
-/** Scan points (where posters hang), their QR codes and printable posters. */
+/** One QR poster per spot: make it, print it, and see how many scans each spot gets. */
 export default function QrPosters() {
   const store = useStore();
   const { scanPoints, district } = store;
   const [events, setEvents] = useState<AnalyticsEvent[]>([]);
   const [retired, setRetired] = useState(loadRetiredCodes);
-  const [selected, setSelected] = useState<string | null>(scanPoints[0]?.code ?? null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [printing, setPrinting] = useState<ScanPoint | null>(null);
   const stopPrinting = useCallback(() => setPrinting(null), []);
+  const panel = useRef<HTMLDivElement>(null);
+  /** Picks a poster or the new-poster form. Below `xl` the panel sits under the list, so it is scrolled into view. */
+  const show = (code: string) => {
+    setSelected(code);
+    if (!window.matchMedia('(min-width: 1280px)').matches)
+      requestAnimationFrame(() => panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
 
   useEffect(() => {
     void store.listEvents().then(setEvents);
@@ -50,65 +59,81 @@ export default function QrPosters() {
     return byCode;
   }, [events]);
 
-  const point = selected && selected !== 'new' ? scanPoints.find((p) => p.code === selected) : undefined;
+  const adding = selected === 'new';
+  // Nothing picked, or the picked poster is gone: show the first one.
+  const point = adding ? undefined : (scanPoints.find((p) => p.code === selected) ?? scanPoints[0]);
+  const totalScans = scanPoints.reduce((n, p) => n + (scans.get(p.code)?.count ?? 0), 0);
 
   return (
-    <div className="mx-auto max-w-[1160px] px-8 py-7">
-      <header className="mb-5 flex items-end justify-between gap-4">
-        <div>
-          <p className="font-mono text-[11px] tracking-wider text-slate-500">QR POSTERS</p>
-          <h1 className="text-2xl font-bold">Scan points</h1>
-          <p className="text-sm text-slate-600">
+    <div className="mx-auto max-w-[1000px] space-y-5 px-4 py-5 md:px-8 md:py-7">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          {scanPoints.length > 0 && (
+            <p className={labelClass}>
+              {plural(scanPoints.length, 'poster')}
+              {/* With one poster the total is the number in its row. */}
+              {scanPoints.length > 1 && ` · ${plural(totalScans, 'scan')}`}
+            </p>
+          )}
+          <h1 className="text-xl font-bold md:text-2xl">QR posters</h1>
+          <p className="mt-1 max-w-xl text-sm text-slate-500">
             Each poster has its own code, so you can see which spots bring people in. Codes are printed, so they are never reused.
           </p>
         </div>
         <div className="flex items-center gap-3">
           <SampleBadge />
-          <button
-            onClick={() => setSelected('new')}
-            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-dark"
-          >
-            <Plus className="h-4 w-4" /> New scan point
+          {/* Orange only while it is the one thing to do here. */}
+          <button onClick={() => show('new')} className={`${scanPoints.length || adding ? button : primary} whitespace-nowrap`}>
+            <Plus className="h-4 w-4" /> New poster
           </button>
         </div>
       </header>
 
-      <div className="grid items-start gap-6 xl:grid-cols-[1fr_400px]">
-        <div className="rounded-xl border border-slate-200 bg-white">
+      <div className={`grid items-start gap-5 ${adding || point ? 'xl:grid-cols-[1fr_380px]' : ''}`}>
+        <div className={`${card} min-w-0 overflow-hidden`}>
           {scanPoints.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">No scan points yet. Add one for each poster you put up.</p>
+            <div className="px-4 py-10 text-center md:px-5">
+              <p className="font-semibold">No posters yet</p>
+              <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
+                Make one for each spot where you have permission to post: a noticeboard, a library entrance, a shop window.
+              </p>
+            </div>
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-200 text-left font-mono text-[10px] text-slate-500">
-                  <th className="px-5 py-2 font-normal">CODE</th>
-                  <th className="py-2 font-normal">WHERE</th>
-                  <th className="py-2 font-normal">LINKED PROBLEM</th>
-                  <th className="px-5 py-2 text-right font-normal">QR SCANS</th>
+                <tr className={`${labelClass} border-b border-slate-100 text-left`}>
+                  <th className="px-4 py-2 font-medium md:px-5">Code</th>
+                  <th className="py-2 font-medium">Where</th>
+                  <th className="hidden whitespace-nowrap py-2 pl-4 font-medium sm:table-cell">Linked issue</th>
+                  <th className="whitespace-nowrap px-4 py-2 text-right font-medium md:px-5">QR scans</th>
                 </tr>
               </thead>
               <tbody>
                 {scanPoints.map((p) => {
                   const s = scans.get(p.code);
                   return (
+                    // A table row can't be a real button, so it is given a button's role and keys.
                     <tr
                       key={p.code}
-                      onClick={() => setSelected(p.code)}
-                      className={`cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${selected === p.code ? 'bg-brand-soft/60' : ''}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-current={p === point ? 'true' : undefined}
+                      onClick={() => show(p.code)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault();
+                        show(p.code);
+                      }}
+                      className={`cursor-pointer border-b border-slate-100 -outline-offset-2 last:border-0 ${p === point ? 'bg-slate-100' : 'hover:bg-slate-50'}`}
                     >
-                      <td className="px-5 py-3 font-mono text-xs">
-                        <span className="inline-flex items-center gap-2">
-                          <QrCode className="h-4 w-4 text-brand" />
-                          {p.code}
-                        </span>
-                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs md:px-5">{p.code}</td>
                       <td className="py-3">
                         <p className="font-medium">{p.name}</p>
                         <p className="text-xs text-slate-500">{p.detail}</p>
                       </td>
-                      <td className="py-3 font-mono text-xs text-slate-500">{p.issueId ?? '—'}</td>
-                      <td className="px-5 py-3 text-right">
-                        <p className="font-semibold">{s?.count ?? 0}</p>
+                      <td className="hidden whitespace-nowrap py-3 pl-4 font-mono text-xs text-slate-500 sm:table-cell">{p.issueId ?? '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right md:px-5">
+                        <p className="font-semibold tabular-nums">{s?.count ?? 0}</p>
                         <p className="text-xs text-slate-500">{s?.last ? `last ${shortDate(nyDate(s.last))}` : 'none yet'}</p>
                       </td>
                     </tr>
@@ -119,18 +144,17 @@ export default function QrPosters() {
           )}
         </div>
 
-        <aside className="rounded-xl border border-slate-200 bg-white p-5">
-          {selected === 'new' ? (
-            <Editor
-              key="new"
-              used={used}
-              onSaved={(code) => setSelected(code)}
-              onCancel={() => setSelected(scanPoints[0]?.code ?? null)}
-            />
-          ) : point ? (
-            <>
+        {adding ? (
+          <aside ref={panel} className={`${card} min-w-0 scroll-mt-4 p-4 md:p-5`}>
+            <Editor key="new" used={used} onSaved={setSelected} onCancel={() => setSelected(null)} />
+          </aside>
+        ) : point ? (
+          // Poster above its form; side by side while the page is one column but wide enough for both.
+          <aside ref={panel} className={`${card} min-w-0 scroll-mt-4 lg:grid lg:grid-cols-2 xl:block`}>
+            <div className="min-w-0 p-4 md:p-5">
               <PosterPanel point={point} onPrint={() => setPrinting(point)} />
-              <div className="my-5 h-px bg-slate-200" />
+            </div>
+            <div className="min-w-0 border-t border-slate-100 p-4 md:p-5 lg:border-l lg:border-t-0 xl:border-l-0 xl:border-t">
               <Editor
                 key={point.code}
                 point={point}
@@ -146,14 +170,12 @@ export default function QrPosters() {
                 onDeleted={(code) => {
                   retireCode(code);
                   setRetired(loadRetiredCodes());
-                  setSelected(scanPoints.find((p) => p.code !== code)?.code ?? null);
+                  setSelected(null);
                 }}
               />
-            </>
-          ) : (
-            <p className="py-8 text-center text-sm text-slate-500">Pick a scan point, or add one for a new poster.</p>
-          )}
-        </aside>
+            </div>
+          </aside>
+        ) : null}
       </div>
 
       {printing && <PrintPoster point={printing} district={district} onDone={stopPrinting} />}
@@ -165,29 +187,46 @@ function PosterPanel({ point, onPrint }: { point: ScanPoint; onPrint: () => void
   const { district } = useStore();
   const url = shortLink(point.code);
   const svg = useQrSvg(url);
-  const button = 'flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:border-slate-300';
+
+  // The preview is 40% of true size, or as much as fits where the panel is narrower (phones).
+  const frame = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.4);
+  useEffect(() => {
+    const el = frame.current!;
+    // 816px is 8.5in; 2px is the border around the preview.
+    const watch = new ResizeObserver(() => setScale(Math.min(0.4, (el.clientWidth - 2) / 816)));
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
 
   return (
-    <div>
-      <p className={label}>POSTER · US LETTER</p>
-      <div className="mx-auto w-fit border border-slate-200 shadow-sm">
-        <Poster point={point} district={district} scale={0.4} />
+    <div ref={frame}>
+      <p className={labelClass}>Poster · US Letter</p>
+      <div className="mx-auto mt-2 w-fit border border-slate-200">
+        <Poster point={point} district={district} scale={scale} />
       </div>
-      <p className="mt-3 text-center font-mono text-xs text-slate-600">
-        QR opens <span className="text-ink">{displayLink(url)}</span>
+      <p className="mt-3 text-center text-xs text-slate-500">
+        QR opens <span className="font-mono text-ink">{displayLink(url)}</span>
       </p>
       <div className="mt-3 flex flex-wrap justify-center gap-2">
+        <button onClick={onPrint} className={primary}>
+          Print poster
+        </button>
+        {/* The code on its own, for a newsletter or a flyer. */}
         <button
-          onClick={onPrint}
-          className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-dark"
+          disabled={!svg}
+          onClick={() => svg && downloadText(`problem-pins-${point.code}.svg`, svg, 'image/svg+xml')}
+          title="Download the QR code on its own"
+          className={button}
         >
-          <Printer className="h-4 w-4" /> Print poster
+          QR SVG
         </button>
-        <button disabled={!svg} onClick={() => svg && downloadText(`problem-pins-${point.code}.svg`, svg, 'image/svg+xml')} className={button}>
-          <Download className="h-4 w-4" /> SVG
-        </button>
-        <button onClick={async () => downloadUrl(`problem-pins-${point.code}.png`, await qrPng(url))} className={button}>
-          <Download className="h-4 w-4" /> PNG
+        <button
+          onClick={async () => downloadUrl(`problem-pins-${point.code}.png`, await qrPng(url))}
+          title="Download the QR code on its own"
+          className={button}
+        >
+          QR PNG
         </button>
       </div>
     </div>
@@ -227,7 +266,7 @@ function Editor({
     : code !== point?.code && used.has(code)
       ? `${code} has been used before. Codes are printed, so they are never reused.`
       : null;
-  const missing = !draft.name.trim() ? 'Give it a name.' : draft.lat === null ? 'Click the map to place it.' : null;
+  const missing = !draft.name.trim() ? 'Give it a name.' : draft.lat === null ? 'Pick its location on the map.' : null;
   const pick = draft.lat !== null && draft.lng !== null ? { lat: draft.lat, lng: draft.lng } : null;
   const mapCenter = useMemo(() => (point ? { lat: point.lat, lng: point.lng } : undefined), [point]);
 
@@ -277,87 +316,90 @@ function Editor({
   };
 
   return (
-    <div>
-      <p className={label}>{point ? 'EDIT SCAN POINT' : 'NEW SCAN POINT'}</p>
-      <div className="mt-2 grid grid-cols-[110px_1fr] gap-3">
-        <div>
-          <label className={label} htmlFor="sp-code">
-            CODE
-          </label>
-          <input id="sp-code" className={`${input} font-mono`} value={draft.code} onChange={(e) => set({ code: e.target.value })} />
-        </div>
-        <div>
-          <label className={label} htmlFor="sp-name">
-            NAME
-          </label>
-          <input
-            id="sp-name"
-            className={input}
-            value={draft.name}
-            placeholder="BID noticeboard, W 16th St"
-            onChange={(e) => set({ name: e.target.value })}
-          />
-        </div>
-      </div>
-      {codeError && <p className="mt-1.5 text-xs text-brand">{codeError}</p>}
+    <div className="space-y-3">
+      <p className={labelClass}>{point ? 'Edit poster' : 'New poster'}</p>
+      <label className="block w-28 text-sm font-medium">
+        Code
+        <input className={`${field} font-mono`} value={draft.code} onChange={(e) => set({ code: e.target.value })} />
+      </label>
+      {codeError && <p className="text-xs text-red-800">{codeError}</p>}
       {!codeError && codeChanged && (
-        <p className="mt-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
           {printed ? `${point!.code} has been scanned, so posters with it are up.` : `${point!.code} may already be printed.`} Changing
           the code breaks those posters; {point!.code} will be retired.
         </p>
       )}
-
-      <label className={`${label} mt-3`} htmlFor="sp-detail">
-        DETAIL
+      <label className="block text-sm font-medium">
+        Name
+        <input
+          className={field}
+          value={draft.name}
+          placeholder="e.g. Library entrance, W 23rd St"
+          onChange={(e) => set({ name: e.target.value })}
+        />
       </label>
-      <input
-        id="sp-detail"
-        className={input}
-        value={draft.detail}
-        placeholder="Between 9th and 10th Ave"
-        onChange={(e) => set({ detail: e.target.value })}
-      />
+      <label className="block text-sm font-medium">
+        Detail <span className={optional}>(optional)</span>
+        <input
+          className={field}
+          value={draft.detail}
+          placeholder="e.g. Between 7th and 8th Ave"
+          onChange={(e) => set({ detail: e.target.value })}
+        />
+      </label>
+      <p className="text-xs text-slate-500">
+        Post where you have permission: noticeboards, library and community-center entrances, lobbies, shop windows. The City doesn’t
+        allow posters on lamp posts, trees, bus shelters or benches.
+      </p>
 
-      <p className={`${label} mt-3`}>LOCATION · CLICK THE MAP</p>
-      <div className="h-52 overflow-hidden rounded-lg border border-slate-200">
-        <IssueMap issues={[]} center={mapCenter} zoom={district.zoom} pick={pick} onPick={(p) => set({ lat: p.lat, lng: p.lng })} zoomControl />
+      <div>
+        <p className="text-sm font-medium">
+          Location <span className={optional}>(pick it on the map)</span>
+        </p>
+        <div className="mt-1 h-52 overflow-hidden rounded-lg border border-slate-200">
+          <IssueMap issues={[]} center={mapCenter} zoom={district.zoom} pick={pick} onPick={(p) => set({ lat: p.lat, lng: p.lng })} zoomControl />
+        </div>
       </div>
 
-      <label className={`${label} mt-3`} htmlFor="sp-issue">
-        LINKED PROBLEM (OPTIONAL)
+      <label className="block text-sm font-medium">
+        Linked issue <span className={optional}>(optional)</span>
+        <select className={field} value={draft.issueId} onChange={(e) => set({ issueId: e.target.value })}>
+          <option value="">None: the scan page asks what’s wrong</option>
+          {draft.issueId && !nearby.some((n) => n.issue.id === draft.issueId) && <option value={draft.issueId}>{draft.issueId}</option>}
+          {nearby.map(({ issue, d }) => (
+            <option key={issue.id} value={issue.id}>
+              {issue.id} · {issue.title}
+              {d !== null ? ` · ${formatMeters(d)}` : ''}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block text-xs font-normal text-slate-500">
+          Shown first on the scan page so people +1 it instead of pinning it again.
+        </span>
       </label>
-      <select id="sp-issue" className={input} value={draft.issueId} onChange={(e) => set({ issueId: e.target.value })}>
-        <option value="">None: the scan page asks what’s wrong</option>
-        {draft.issueId && !nearby.some((n) => n.issue.id === draft.issueId) && <option value={draft.issueId}>{draft.issueId}</option>}
-        {nearby.map(({ issue, d }) => (
-          <option key={issue.id} value={issue.id}>
-            {issue.id} · {issue.title}
-            {d !== null ? ` · ${formatMeters(d)}` : ''}
-          </option>
-        ))}
-      </select>
-      <p className="mt-1 text-xs text-slate-500">Shown first on the scan page so people +1 it instead of pinning it again.</p>
 
-      <div className="mt-5 flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           onClick={save}
           disabled={busy || Boolean(codeError || missing)}
-          className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          className={`rounded-lg px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-40 ${
+            point ? 'bg-ink hover:bg-ink/90' : 'bg-brand hover:bg-brand-dark'
+          }`}
         >
-          {point ? (codeChanged ? `Save and retire ${point.code}` : 'Save changes') : `Add ${code || 'scan point'}`}
+          {point ? (codeChanged ? `Save and retire ${point.code}` : 'Save changes') : `Add ${code || 'poster'}`}
         </button>
         {onCancel && (
-          <button onClick={onCancel} className="text-sm font-medium text-slate-600">
+          <button onClick={onCancel} className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium hover:border-slate-300">
             Cancel
           </button>
         )}
         {point && (
-          <button onClick={remove} className="ml-auto flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-brand">
+          <button onClick={remove} className="ml-auto flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-ink">
             <Trash2 className="h-4 w-4" /> Delete
           </button>
         )}
       </div>
-      {missing && !codeError && <p className="mt-2 text-xs text-slate-500">{missing}</p>}
+      {missing && !codeError && <p className="text-xs text-slate-500">{missing}</p>}
     </div>
   );
 }

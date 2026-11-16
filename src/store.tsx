@@ -7,6 +7,8 @@ import type {
   District,
   FollowContact,
   Issue,
+  ReportReason,
+  ResidentAccount,
   ScanPoint,
   StaffUser,
   Status,
@@ -28,6 +30,10 @@ interface Store {
   voted: string[];
   following: string[];
   confirmed: Record<string, 'yes' | 'no'>;
+  /** Issues this device reported. */
+  reported: string[];
+  /** The resident account signed in on this device, if any (optional; `residentAccounts` in config). */
+  account: ResidentAccount | null;
   staff: StaffUser | null;
   lastCreatedId: string | null;
   clearLastCreated: () => void;
@@ -35,13 +41,24 @@ interface Store {
   getIssue: (id: string) => Issue | undefined;
   refresh: () => Promise<void>;
 
-  // residents
+  // residents (undoing something is not an analytics event)
   vote: (id: string, source?: string) => Promise<boolean>;
+  unvote: (id: string) => Promise<boolean>;
   follow: (id: string, contact?: FollowContact) => Promise<boolean>;
+  unfollow: (id: string) => Promise<boolean>;
   /** Uploads the photos, creates the issue and resolves to its new ID (null on failure). */
   addIssue: (draft: Omit<NewIssueDraft, 'photos'>, photos?: Blob[]) => Promise<string | null>;
   addComment: (id: string, text: string) => Promise<boolean>;
+  deleteNote: (id: string, noteId: string) => Promise<boolean>;
   confirmFix: (id: string, answer: 'yes' | 'no') => Promise<boolean>;
+  removeIssue: (id: string) => Promise<boolean>;
+  reportIssue: (id: string, reason: ReportReason) => Promise<boolean>;
+
+  // resident accounts: sign-in screens show these errors in place, so they return them
+  requestResidentCode: (email: string) => Promise<{ error: string } | { demoCode?: string }>;
+  verifyResidentCode: (email: string, code: string, source?: string) => Promise<{ error: string } | { returning: boolean }>;
+  signOutResident: () => Promise<boolean>;
+  deleteResidentAccount: () => Promise<boolean>;
 
   // staff
   postUpdate: (id: string, text: string, status?: Status) => Promise<boolean>;
@@ -51,11 +68,13 @@ interface Store {
   nudgeCity: (id: string) => Promise<boolean>;
   hideIssue: (id: string, reason: string) => Promise<boolean>;
   unhideIssue: (id: string) => Promise<boolean>;
+  dismissReports: (id: string) => Promise<boolean>;
   mergeIssue: (duplicateId: string, intoId: string) => Promise<boolean>;
   saveScanPoint: (point: ScanPoint) => Promise<boolean>;
   deleteScanPoint: (code: string) => Promise<boolean>;
   listEvents: (since?: string) => Promise<AnalyticsEvent[]>;
-  signIn: (email: string, password: string) => Promise<boolean>;
+  /** Resolves to null once signed in, or to a message the sign-in page can show. */
+  signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<boolean>;
 
   track: (event: Omit<AnalyticsEvent, 'at'>) => void;
@@ -107,9 +126,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setStaff(signedIn);
         setBackend(b);
         cleanups = [
+          // Reload at most once per second however many pings arrive: a burst of changes
+          // (or a flood) costs one snapshot per second per open app, and updates still arrive.
           b.subscribe(() => {
-            window.clearTimeout(refreshTimer.current);
-            refreshTimer.current = window.setTimeout(() => void reload(b).catch(() => {}), 250);
+            if (refreshTimer.current !== undefined) return;
+            refreshTimer.current = window.setTimeout(() => {
+              refreshTimer.current = undefined;
+              void reload(b).catch(() => {});
+            }, 1000);
           }),
           b.onAuthChange((s) => {
             setStaff(s);
@@ -123,6 +147,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       cleanups.forEach((fn) => fn());
+      window.clearTimeout(refreshTimer.current);
+      refreshTimer.current = undefined;
     };
   }, [reload]);
 
@@ -159,6 +185,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       voted: snapshot.me.voted,
       following: snapshot.me.following,
       confirmed: snapshot.me.confirmed,
+      reported: snapshot.me.reported,
+      account: snapshot.me.account ?? null,
       staff,
       lastCreatedId,
       toastMessage,
@@ -177,6 +205,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return run(() => b.vote(id), { name: 'vote', issueId: id, props: source ? { source } : undefined });
       },
 
+      unvote: (id) => {
+        if (!snapshot.me.voted.includes(id)) return Promise.resolve(true);
+        patch(id, (s) => ({
+          ...s,
+          me: { ...s.me, voted: s.me.voted.filter((v) => v !== id) },
+          issues: s.issues.map((i) =>
+            i.id === id ? { ...i, votes: Math.max(0, i.votes - 1), votesThisWeek: Math.max(0, i.votesThisWeek - 1) } : i,
+          ),
+        }));
+        return run(() => b.unvote(id));
+      },
+
       follow: (id, contact) => {
         const already = snapshot.me.following.includes(id);
         if (!already) {
@@ -191,6 +231,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           issueId: id,
           props: { contact: contact?.email ? 'email' : contact?.phone ? 'phone' : 'none' },
         });
+      },
+
+      unfollow: (id) => {
+        if (snapshot.me.following.includes(id)) {
+          patch(id, (s) => ({
+            ...s,
+            me: { ...s.me, following: s.me.following.filter((f) => f !== id) },
+            issues: s.issues.map((i) => (i.id === id ? { ...i, following: Math.max(0, i.following - 1) } : i)),
+          }));
+        }
+        return run(() => b.unfollow(id));
       },
 
       addIssue: async (draft, photos = []) => {
@@ -208,7 +259,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
 
       addComment: (id, text) => run(() => b.comment(id, text), { name: 'comment', issueId: id }),
+      deleteNote: (id, noteId) => run(() => b.deleteNote(id, noteId)),
       confirmFix: (id, answer) => run(() => b.confirmFix(id, answer), { name: 'confirm_fix', issueId: id, props: { answer } }),
+      removeIssue: (id) => run(() => b.removeIssue(id)),
+      reportIssue: (id, reason) => run(() => b.reportIssue(id, reason), { name: 'report', issueId: id, props: { reason } }),
+
+      requestResidentCode: async (email) => {
+        try {
+          return await b.requestResidentCode(email);
+        } catch (error) {
+          return { error: message(error) };
+        }
+      },
+      verifyResidentCode: async (email, code, source) => {
+        try {
+          const result = await b.verifyResidentCode(email, code);
+          b.track({ name: 'account_signin', props: { returning: result.returning, ...(source ? { source } : {}) } });
+          await reload(b);
+          return result;
+        } catch (error) {
+          return { error: message(error) };
+        }
+      },
+      signOutResident: () => run(() => b.signOutResident()),
+      deleteResidentAccount: () => run(() => b.deleteResidentAccount()),
 
       postUpdate: (id, text, status) =>
         run(() => b.postUpdate(id, text, status), { name: 'staff_update', issueId: id, props: status ? { status } : undefined }),
@@ -218,6 +292,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       nudgeCity: (id) => run(() => b.nudgeCity(id), { name: 'staff_nudge', issueId: id }),
       hideIssue: (id, reason) => run(() => b.hideIssue(id, reason), { name: 'staff_hide', issueId: id }),
       unhideIssue: (id) => run(() => b.unhideIssue(id)),
+      dismissReports: (id) => run(() => b.dismissReports(id)),
       mergeIssue: (duplicateId, intoId) =>
         run(() => b.mergeIssue(duplicateId, intoId), { name: 'staff_merge', issueId: intoId, props: { duplicate: duplicateId } }),
       saveScanPoint: (point) => run(() => b.saveScanPoint(point)),
@@ -230,7 +305,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return [];
         }
       },
-      signIn: (email, password) => run(() => b.signIn(email, password)),
+      signIn: async (email, password) => {
+        try {
+          await b.signIn(email, password);
+          await reload(b);
+          return null;
+        } catch (error) {
+          await reload(b).catch(() => {});
+          return message(error);
+        }
+      },
       signOut: () => run(() => b.signOut()),
 
       track: (event) => b.track(event),
@@ -259,8 +343,8 @@ function StartupScreen({ error }: { error?: string }) {
           </button>
         </div>
       ) : (
-        <p className="font-mono text-xs tracking-wider text-slate-400" role="status">
-          LOADING…
+        <p className="text-sm text-slate-500" role="status">
+          Loading…
         </p>
       )}
     </div>

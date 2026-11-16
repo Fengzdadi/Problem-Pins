@@ -20,11 +20,30 @@ export interface IssueUpdate {
   date: string;
   /** True when this device/browser wrote it. */
   mine?: boolean;
+  /** The staff member who posted a district update. Only staff receive it; residents see the district. */
+  staffName?: string;
 }
 
 export interface HistoryEvent {
   date: string;
   text: string;
+  /** The staff member who did it. Only staff receive it; residents see the district. */
+  staffName?: string;
+  /** A line only staff see (dismissing reports). Residents never receive these. */
+  staffOnly?: boolean;
+}
+
+/** Why a resident reported a pin. Labels in `REPORT_REASONS` (src/data/meta.ts). */
+export type ReportReason = 'spam' | 'offensive' | 'personal_info' | 'not_public_space' | 'other';
+
+/** Residents' reports on a pin that staff haven't handled yet. Only staff receive this; reports are never public. */
+export interface IssueReports {
+  /** Devices that reported it. */
+  count: number;
+  /** The day the oldest of these reports came in. */
+  since: string;
+  /** Most reported first. */
+  reasons: { reason: ReportReason; count: number }[];
 }
 
 export interface CityRequest {
@@ -32,7 +51,8 @@ export interface CityRequest {
   agency: string;
   routedTo: string;
   sentOn: string;
-  sentBy: string;
+  /** The staff member who filed it. Only staff see it; residents see updates signed by the district. */
+  sentBy?: string;
   lastFollowUp?: string;
 }
 
@@ -68,6 +88,8 @@ export interface Issue {
   following: number;
   duplicatesMerged: number;
   confirmedFixed: number;
+  /** Neighbors who said it still isn't fixed since it was last marked fixed. */
+  notFixed: number;
   fixedOn?: string;
   isUserReport?: boolean;
   /** Staff removed it from the public map. Only staff ever receive hidden issues. */
@@ -75,18 +97,19 @@ export interface Issue {
   hiddenReason?: string;
   /** Staff merged it into another issue as a duplicate. */
   mergedInto?: string;
+  /** Open reports from residents. Staff only; absent when there are none. */
+  reports?: IssueReports;
 }
 
-/** When the dashboard flags an issue (see `src/org/actions.tsx`). */
+/**
+ * When the dashboard's to-do list flags an issue (see `src/org/dashboard.ts`). New pins and
+ * residents waiting for a reply are always on it; votes never decide whether an issue is.
+ */
 export interface AttentionRules {
-  /** Unowned issues with this many votes get flagged for review. */
-  reviewVotes: number;
-  /** ...or after this many days open. */
-  reviewDays: number;
-  /** City-owned issues with this many votes get flagged to forward to 311. */
-  forwardVotes: number;
-  /** City requests with no reply for this many days get flagged for a nudge. */
+  /** Sent to the City with no follow-up logged for this many days. */
   cityNoReplyDays: number;
+  /** Residents haven't had an update from the district for this many days. */
+  quietDays: number;
 }
 
 /** Minimal GeoJSON geometry for a district boundary, coordinates in [lng, lat] order. */
@@ -107,14 +130,14 @@ export interface District {
   boundary?: DistrictBoundary;
   /** Which of the fixed categories this district takes, in display order. */
   categories: Category[];
-  /** Teams work can be assigned to, e.g. "BID crew". */
+  /** Who an issue can be assigned to, e.g. "District office staff". */
   teams: string[];
   rules: AttentionRules;
   /** Shown to residents as the human contact for the program. */
   contactEmail?: string;
 }
 
-/** A printed QR code at a fixed spot (noticeboard, bench, lamp post). */
+/** A printed QR code at a fixed spot (a noticeboard, a library entrance, a shop window). */
 export interface ScanPoint {
   /** Printed on the poster and in the short link, e.g. "Q-12". Never reuse a code. */
   code: string;
@@ -135,11 +158,24 @@ export interface StaffUser {
   districtId: string;
 }
 
-/** What this device/browser has done. Residents have no account. */
+/** What this device/browser has done (or the resident account signed in on it). */
 export interface MyState {
   voted: string[];
   following: string[];
   confirmed: Record<string, 'yes' | 'no'>;
+  /** Issues this device reported (one report per device per issue). */
+  reported: string[];
+  /**
+   * Set while a resident account is signed in on this device (optional). The email is the
+   * resident's own and is never shown to neighbors or to the district office.
+   */
+  account?: ResidentAccount;
+}
+
+export interface ResidentAccount {
+  email: string;
+  /** `YYYY-MM-DD` the account was created. */
+  since: string;
 }
 
 /** Optional contact a resident leaves to get updates. Never shown publicly. */
@@ -158,6 +194,9 @@ export type AnalyticsEventName =
   | 'follow'
   | 'comment'
   | 'confirm_fix'
+  | 'share'
+  | 'report'
+  | 'account_signin'
   | 'staff_update'
   | 'staff_status'
   | 'staff_assign'

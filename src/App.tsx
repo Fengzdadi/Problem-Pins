@@ -8,11 +8,14 @@ import IssueDetail from './resident/IssueDetail';
 import NewPin from './resident/NewPin';
 import ScanLanding from './resident/ScanLanding';
 import Updates from './resident/Updates';
+import About from './resident/About';
+import Account from './resident/Account';
 import OrgShell, { type OrgSection } from './org/OrgShell';
 import Overview from './org/Overview';
 import Issues from './org/Issues';
 import OrgMap from './org/OrgMap';
 import Reports from './org/Reports';
+import Experiments from './org/Experiments';
 import QrPosters from './org/QrPosters';
 import Login from './org/Login';
 import RequireStaff from './org/RequireStaff';
@@ -23,7 +26,7 @@ function DemoBar({ org }: { org: boolean }) {
   const tab = (active: boolean) =>
     `rounded-md px-3 py-1 text-xs font-medium transition ${active ? 'bg-white text-ink shadow-sm' : 'text-slate-300 hover:text-white'}`;
   return (
-    <div className="flex h-10 shrink-0 items-center justify-between gap-3 bg-[#0b1020] px-4 text-xs text-slate-300 print:hidden">
+    <div className="flex h-10 shrink-0 items-center justify-between gap-3 bg-[#0b1020] px-4 text-xs text-slate-300 [--focus-ring:white] print:hidden">
       <span className="hidden sm:inline">
         <span className="font-semibold text-white">Problem Pins</span> · clickable prototype · sample data, West Chelsea
       </span>
@@ -32,11 +35,11 @@ function DemoBar({ org }: { org: boolean }) {
           Resident
         </button>
         <button className={tab(org)} onClick={() => navigate('/org')}>
-          Organization
+          District office
         </button>
       </div>
       <button
-        className="flex items-center gap-1.5 text-slate-400 hover:text-white"
+        className="flex items-center gap-1.5 text-slate-300 hover:text-white"
         onClick={async () => {
           if (await reset()) toast('Demo data reset');
         }}
@@ -57,7 +60,7 @@ export default function App() {
   if (isOrg && seg[1] === 'login') {
     content = <Login next={query.get('next')} />;
   } else if (isOrg) {
-    const section = (seg[1] ?? 'overview') as OrgSection;
+    const section = (seg[1] ?? 'overview') as OrgSection | 'experiments';
     let page;
     switch (section) {
       case 'issues':
@@ -70,7 +73,10 @@ export default function App() {
         page = <OrgMap />;
         break;
       case 'reports':
-        page = <Reports />;
+        page = <Reports month={query.get('month')} />;
+        break;
+      case 'experiments':
+        page = <Experiments />;
         break;
       case 'qr':
         page = <QrPosters />;
@@ -80,7 +86,9 @@ export default function App() {
     }
     content = (
       <RequireStaff path={path}>
-        <OrgShell active={section === 'sent' || query.get('tab') === 'city' ? 'sent' : section}>{page}</OrgShell>
+        <OrgShell active={section === 'sent' || query.get('tab') === 'city' ? 'sent' : section === 'experiments' ? 'reports' : section}>
+          {page}
+        </OrgShell>
       </RequireStaff>
     );
   } else {
@@ -97,6 +105,12 @@ export default function App() {
         break;
       case 'updates':
         page = <Updates />;
+        break;
+      case 'about':
+        page = <About />;
+        break;
+      case 'account':
+        page = <Account next={query.get('next')} from={query.get('from')} />;
         break;
       default:
         page = <MapHome />;

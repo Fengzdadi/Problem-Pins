@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import L from 'leaflet';
-import { Circle, CircleMarker, MapContainer, Marker, Polygon, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { Circle, CircleMarker, MapContainer, Marker, Polygon, Polyline, TileLayer, Tooltip, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import { config } from '../config';
 import { STATUSES } from '../data/meta';
 import type { DistrictBoundary, Issue } from '../data/types';
@@ -33,7 +33,9 @@ interface Props {
   centerKey?: string | number;
   /** Outline the district and dim what's outside it. On by default when the district has a boundary. */
   showBoundary?: boolean;
+  /** +/- buttons, in the top left unless `zoomPosition` says otherwise. */
   zoomControl?: boolean;
+  zoomPosition?: L.ControlPosition;
   interactive?: boolean;
   className?: string;
 }
@@ -52,7 +54,13 @@ function radiusFor(issue: Issue, sizeByVotes: boolean) {
 function FlyTo({ center, zoom, centerKey }: { center?: LatLng; zoom?: number; centerKey?: string | number }) {
   const map = useMap();
   useEffect(() => {
-    if (center) map.flyTo([center.lat, center.lng], zoom ?? map.getZoom(), { duration: 0.6 });
+    if (!center) return;
+    const target: [number, number] = [center.lat, center.lng];
+    const z = zoom ?? map.getZoom();
+    // flyTo divides by the map's size, so in a hidden (0×0) box it computes NaN and throws.
+    const box = map.getContainer();
+    if (box.clientWidth && box.clientHeight) map.flyTo(target, z, { duration: 0.6 });
+    else map.setView(target, z, { animate: false });
   }, [center?.lat, center?.lng, centerKey]); // eslint-disable-line react-hooks/exhaustive-deps
   return null;
 }
@@ -98,6 +106,22 @@ function AttributionPrefix() {
   return null;
 }
 
+/**
+ * A map inside a form: the wheel scrolls the page instead of zooming the map. A trackpad pinch
+ * arrives as a wheel event with ctrl held, and that still zooms, like the buttons and a touch pinch.
+ */
+function WheelScrollsPage() {
+  const map = useMap();
+  useEffect(() => {
+    const box = map.getContainer();
+    // In the capture phase, so Leaflet's own wheel listener is on or off before the event reaches it.
+    const onWheel = (e: WheelEvent) => map.scrollWheelZoom[e.ctrlKey ? 'enable' : 'disable']();
+    box.addEventListener('wheel', onWheel, true);
+    return () => box.removeEventListener('wheel', onWheel, true);
+  }, [map]);
+  return null;
+}
+
 function ResizeWatcher() {
   const map = useMap();
   useEffect(() => {
@@ -124,6 +148,7 @@ export default function IssueMap({
   centerKey,
   showBoundary = true,
   zoomControl = false,
+  zoomPosition = 'topleft',
   interactive = true,
   className = '',
 }: Props) {
@@ -135,10 +160,10 @@ export default function IssueMap({
     <MapContainer
       center={[start.lat, start.lng]}
       zoom={zoom}
-      zoomControl={zoomControl}
+      zoomControl={false}
       attributionControl
       dragging={interactive}
-      scrollWheelZoom={interactive}
+      scrollWheelZoom={interactive && !onPick}
       doubleClickZoom={interactive}
       touchZoom={interactive}
       className={`h-full w-full ${className}`}
@@ -146,8 +171,11 @@ export default function IssueMap({
       <TileLayer url={config.mapTiles.url} attribution={config.mapTiles.attribution} />
       <ResizeWatcher />
       <AttributionPrefix />
+      {/* A child rather than MapContainer's zoomControl option, which is read only once, when the map is made. */}
+      {zoomControl && <ZoomControl position={zoomPosition} />}
       <FlyTo center={center} zoom={zoom} centerKey={centerKey} />
       {onPick && <ClickToPick onPick={onPick} />}
+      {onPick && interactive && <WheelScrollsPage />}
       {showBoundary && district.boundary && <Boundary boundary={district.boundary} />}
 
       {heat &&

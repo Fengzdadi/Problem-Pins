@@ -1,44 +1,15 @@
-import { execFileSync } from 'node:child_process';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { nyDate } from '../../lib/format';
 import type { Backend, NewIssueDraft } from '../types';
 import { createSupabaseBackend } from '.';
+import { localStack } from './localStack';
 
 /**
  * Runs against the local Supabase stack (`supabase start`). Skipped when it isn't running,
  * so `npm test` passes anywhere. Uses two throwaway districts, removed afterwards; the
  * seeded sample district is left alone.
  */
-
-interface Stack {
-  url: string;
-  anonKey: string;
-  serviceKey: string;
-}
-
-async function localStack(): Promise<Stack | null> {
-  if (process.env.SKIP_SUPABASE_TESTS) return null;
-  try {
-    const out = execFileSync('supabase', ['status', '-o', 'env'], {
-      encoding: 'utf8',
-      timeout: 15000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const env = Object.fromEntries(
-      out
-        .split('\n')
-        .map((line) => /^([A-Z_]+)="?(.*?)"?$/.exec(line.trim()))
-        .filter((m): m is RegExpExecArray => m !== null)
-        .map((m) => [m[1], m[2]]),
-    );
-    if (!env.API_URL || !env.ANON_KEY || !env.SERVICE_ROLE_KEY) return null;
-    const health = await fetch(`${env.API_URL}/auth/v1/health`, { headers: { apikey: env.ANON_KEY } });
-    return health.ok ? { url: env.API_URL, anonKey: env.ANON_KEY, serviceKey: env.SERVICE_ROLE_KEY } : null;
-  } catch {
-    return null;
-  }
-}
 
 const stack = await localStack();
 const run = Math.random().toString(36).slice(2, 8);
@@ -102,7 +73,7 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
       boundary: square(40.73, -74.0),
       categories: ['lighting', 'litter', 'other'],
       teams: ['Crew'],
-      rules: { reviewVotes: 2, reviewDays: 30, forwardVotes: 25, cityNoReplyDays: 10 },
+      rules: { cityNoReplyDays: 10, quietDays: 14 },
     }));
     const { error } = await admin.from('districts').insert(districts);
     if (error) throw error;
@@ -145,7 +116,7 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     await expect(alice.createIssue(draft('Photo', { photos: ['https://evil.example/pixel.gif'] }))).rejects.toThrow(/uploaded/);
   });
 
-  it('counts one vote per device and logs the review threshold once', async () => {
+  it('counts one vote per device', async () => {
     const other = (await bob.load()).issues.find((i) => i.id === pinned)!;
     expect(other.isUserReport).toBeUndefined();
 
@@ -154,7 +125,7 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     await alice.vote(pinned);
     const issue = (await find(bob, pinned))!;
     expect(issue.votes).toBe(2);
-    expect(issue.history.filter((h) => h.text.startsWith('Passed 2 neighbors'))).toHaveLength(1);
+    expect(issue.history).toHaveLength(1); // votes don't add to the history
   });
 
   it('shows resident notes as "Neighbor", and as "You" to their author', async () => {
@@ -182,22 +153,37 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     expect(data).toEqual([{ email: 'bob@example.com', phone: '2125550100' }]);
   });
 
-  it('records one fix confirmation per device', async () => {
-    await bob.confirmFix(pinned, 'yes');
-    await bob.confirmFix(pinned, 'no');
+  it('records one fix confirmation per device, once the issue is marked fixed', async () => {
+    const id = await alice.createIssue(draft('Broken lamp'));
+    await expect(bob.confirmFix(id, 'yes')).rejects.toThrow('This hasn’t been marked fixed yet.');
+    await staffA.setStatus(id, 'fixed');
+    await bob.confirmFix(id, 'yes');
+    await bob.confirmFix(id, 'no');
     const snap = await bob.load();
-    expect(snap.me.confirmed[pinned]).toBe('yes');
-    expect(snap.issues.find((i) => i.id === pinned)!.confirmedFixed).toBe(1);
+    expect(snap.me.confirmed[id]).toBe('yes');
+    expect(snap.issues.find((i) => i.id === id)!.confirmedFixed).toBe(1);
   });
 
-  it('gives residents no direct table access beyond their own records', async () => {
+  it('counts "not fixed" answers only since the issue was last marked fixed', async () => {
+    const id = await alice.createIssue(draft('Overflowing bin', { category: 'litter' }));
+    await staffA.setStatus(id, 'fixed');
+    await bob.confirmFix(id, 'no');
+    expect((await find(staffA, id))!.notFixed).toBe(1);
+    await staffA.setStatus(id, 'in_review');
+    expect((await find(staffA, id))!.notFixed).toBe(0);
+    await staffA.setStatus(id, 'fixed');
+    expect((await find(staffA, id))!.notFixed).toBe(0);
+  });
+
+  it('gives residents no direct table access', async () => {
     const resident = createClient(url, anonKey, { auth: { persistSession: false } });
     await resident.auth.signInAnonymously();
-    expect((await resident.from('issues').select('id').eq('district_id', A)).data).toEqual([]);
+    for (const table of ['issues', 'issue_updates', 'votes', 'follows', 'events', 'reports']) {
+      expect((await resident.from(table).select('*')).error?.message).toMatch(/permission denied/);
+    }
     expect((await resident.from('votes').insert({ issue_id: pinned, user_id: crypto.randomUUID() })).error).toBeTruthy();
     expect((await resident.from('issues').update({ status: 'fixed' }).eq('id', pinned)).error).toBeTruthy();
     expect((await resident.from('staff').insert({ user_id: crypto.randomUUID(), district_id: A, name: 'x' })).error).toBeTruthy();
-    expect((await resident.from('events').select('*')).data).toEqual([]);
   });
 
   it('rejects staff actions from residents', async () => {
@@ -247,13 +233,9 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     await staffA.sendToCity(pinned, { sr: '311-22001234', agency: 'NYC DOT', routedTo: 'NYC DOT · Street Lighting' });
     let issue = (await find(alice, pinned))!;
     expect(issue).toMatchObject({ status: 'sent_to_city', owner: 'NYC DOT' });
-    expect(issue.cityRequest).toEqual({
-      sr: '311-22001234',
-      agency: 'NYC DOT',
-      routedTo: 'NYC DOT · Street Lighting',
-      sentOn: nyDate(),
-      sentBy: 'Avery',
-    });
+    // Residents don't see which staff member filed it.
+    expect(issue.cityRequest).toEqual({ sr: '311-22001234', agency: 'NYC DOT', routedTo: 'NYC DOT · Street Lighting', sentOn: nyDate() });
+    expect((await find(staffA, pinned))!.cityRequest!.sentBy).toBe('Avery');
     expect(issue.updates.at(-1)!.text).toContain('SR 311-22001234) with 2 neighbors attached');
 
     await staffA.nudgeCity(pinned);
@@ -293,6 +275,119 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     await expect(bob.vote(dup)).rejects.toThrow(/merged into/);
   });
 
+  // These pin from a device of their own: alice is near the 10-pins-per-hour limit by now.
+  it('takes back a +1, but not the one on your own pin', async () => {
+    const pinner = backend();
+    const id = await pinner.createIssue(draft('Flickering lamp'));
+    await bob.vote(id);
+    expect((await find(alice, id))!.votes).toBe(2);
+    await bob.unvote(id);
+    await bob.unvote(id);
+    expect((await find(alice, id))!.votes).toBe(1);
+    expect((await bob.load()).me.voted).not.toContain(id);
+    await expect(pinner.unvote(id)).rejects.toThrow('You pinned this, so your +1 stays.');
+  });
+
+  it('stops following and deletes the contact left for it', async () => {
+    const pinner = backend();
+    const id = await pinner.createIssue(draft('Dark corner'));
+    await bob.follow(id, { email: 'bob@example.com' });
+    expect((await find(alice, id))!.following).toBe(2);
+    await bob.unfollow(id);
+    expect((await find(alice, id))!.following).toBe(1);
+    expect((await bob.load()).me.following).not.toContain(id);
+    const { data } = await admin.from('follow_contacts').select('email').eq('issue_id', id);
+    expect(data).toEqual([]);
+  });
+
+  it('deletes a note only for the device that wrote it', async () => {
+    const pinner = backend();
+    const id = await pinner.createIssue(draft('Lamp out by the gate'));
+    await bob.comment(id, 'I can be reached at 212 555 0100');
+    const note = (await find(bob, id))!.updates.at(-1)!;
+    await expect(pinner.deleteNote(id, note.id)).rejects.toThrow('Only the phone that wrote a note can delete it.');
+    await expect(staffA.deleteNote(id, note.id)).rejects.toThrow('Only the phone that wrote a note can delete it.');
+    await bob.deleteNote(id, note.id);
+    expect((await find(alice, id))!.updates).toEqual([]);
+  });
+
+  it('lets the device that pinned it remove its pin until a neighbor +1s it or the office acts', async () => {
+    const pinner = backend();
+    const id = await pinner.createIssue(draft('Pinned by mistake'));
+    await expect(bob.removeIssue(id)).rejects.toThrow('Only the phone that pinned this can remove it.');
+    await bob.vote(id);
+    await expect(pinner.removeIssue(id)).rejects.toThrow('Neighbors have +1’d this, so it stays on the map. You can still add a note.');
+    await bob.unvote(id);
+
+    await pinner.removeIssue(id);
+    expect(await find(alice, id)).toBeUndefined();
+    expect(await find(bob, id)).toBeUndefined();
+    const forStaff = (await find(staffA, id))!;
+    expect(forStaff).toMatchObject({ hidden: true, hiddenReason: 'Removed by the person who pinned it' });
+    expect(forStaff.history.at(-1)).toEqual({ date: nyDate(), text: 'Removed by the person who pinned it' });
+
+    await staffA.unhideIssue(id);
+    expect(await find(alice, id)).toBeDefined();
+    await staffA.assign(id, 'Crew');
+    await expect(pinner.removeIssue(id)).rejects.toThrow('Test District A has picked this up, so it stays on the map. You can still add a note.');
+  });
+
+  it('keeps reports from residents: staff see how many and why, a device only that it reported', async () => {
+    const pinner = backend();
+    const id = await pinner.createIssue(draft('Cheap watches, call now'));
+    const carol = backend();
+    await bob.reportIssue(id, 'spam');
+    await bob.reportIssue(id, 'offensive'); // one report per device
+    await carol.reportIssue(id, 'spam');
+    await expect(bob.reportIssue(id, 'rude' as never)).rejects.toThrow('Pick a reason.');
+
+    expect((await bob.load()).me.reported).toContain(id);
+    expect((await pinner.load()).me.reported).not.toContain(id);
+    for (const device of [pinner, bob]) expect(await find(device, id)).not.toHaveProperty('reports');
+    expect((await find(staffA, id))!.reports).toEqual({ count: 2, since: nyDate(), reasons: [{ reason: 'spam', count: 2 }] });
+
+    const resident = createClient(url, anonKey, { auth: { persistSession: false } });
+    await resident.auth.signInAnonymously();
+    const raw = await resident.rpc('get_snapshot', { p_district: A });
+    expect(raw.data.issues.find((i: { id: string }) => i.id === id).reports).toBeNull();
+
+    await expect(bob.dismissReports(id)).rejects.toThrow('Sign in as staff to do that.');
+    await expect(staffB.dismissReports(id)).rejects.toThrow('Sign in as staff to do that.');
+    await staffA.dismissReports(id);
+    const kept = (await find(staffA, id))!;
+    expect(kept).not.toHaveProperty('reports');
+    expect(kept.history.at(-1)).toEqual({ date: nyDate(), text: 'Kept the pin, dismissed 2 reports', staffName: 'Avery', staffOnly: true });
+    expect((await find(alice, id))!.history.map((h) => h.text)).toEqual(['Pinned via Map · test']);
+
+    // A new report brings it back; hiding the pin settles that one too.
+    await backend().reportIssue(id, 'personal_info');
+    expect((await find(staffA, id))!.reports?.count).toBe(1);
+    await staffA.hideIssue(id, 'Spam');
+    expect(await find(staffA, id)).not.toHaveProperty('reports');
+  });
+
+  it('records which staff member did each action, and shows it to staff only', async () => {
+    const pinner = backend();
+    const id = await pinner.createIssue(draft('Who did it'));
+    const dup = await bob.createIssue(draft('Same lamp'));
+    await staffA.assign(id, 'Crew');
+    await staffA.postUpdate(id, 'On it.', 'scheduled');
+    await staffA.sendToCity(id, { sr: '311-22009999', agency: 'NYC DOT' });
+    await staffA.nudgeCity(id);
+    await staffA.hideIssue(id, 'Checking');
+    await staffA.unhideIssue(id);
+    await staffA.mergeIssue(dup, id);
+
+    const forStaff = (await find(staffA, id))!;
+    expect(forStaff.history.slice(1).map((h) => h.staffName)).toEqual(Array(7).fill('Avery'));
+    expect(forStaff.updates.map((u) => u.staffName)).toEqual(['Avery', 'Avery']);
+
+    const forPinner = (await find(alice, id))!;
+    expect(forPinner.history).toHaveLength(8);
+    expect(forPinner.history.some((h) => 'staffName' in h)).toBe(false);
+    expect(forPinner.updates.some((u) => 'staffName' in u)).toBe(false);
+  });
+
   it('saves scan points and never reuses a retired code', async () => {
     await staffA.saveScanPoint({ code: 'q-7', name: 'Noticeboard', detail: 'By the gate', ...INSIDE, issueId: pinned });
     expect((await alice.load()).scanPoints).toEqual([{ code: 'Q-7', name: 'Noticeboard', detail: 'By the gate', ...INSIDE, issueId: pinned }]);
@@ -319,11 +414,15 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
       c.charCodeAt(0),
     );
     const photoUrl = await alice.uploadPhoto(new Blob([png], { type: 'image/png' }));
-    expect(photoUrl).toMatch(/\/storage\/v1\/object\/public\/photos\/.+\.png$/);
+    expect(photoUrl).toMatch(/\/storage\/v1\/object\/public\/photos\/[0-9a-f-]{36}\.png$/);
     expect((await fetch(photoUrl)).status).toBe(200);
 
     const id = await alice.createIssue(draft('With a photo', { photos: [photoUrl] }));
     expect((await find(bob, id))!.photos).toEqual([photoUrl]);
+    // Only the device that uploaded a photo can attach it, and photos elsewhere are refused.
+    await expect(bob.createIssue(draft('Borrowed photo', { photos: [photoUrl] }))).rejects.toThrow(/uploaded/);
+    await expect(alice.createIssue(draft('Tracker', { photos: [photoUrl.replace(/^https?:\/\/[^/]+/, 'https://evil.example')] })))
+      .resolves.toMatch(/^PP-/); // only the name is sent; the app serves it from our bucket
 
     await expect(alice.uploadPhoto(new Blob(['hello'], { type: 'text/plain' }))).rejects.toThrow(/Only photos/);
   });
@@ -336,6 +435,36 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     await new Promise((r) => setTimeout(r, 1500)); // let the channel join
     await alice.createIssue(draft('Realtime check'));
     await pinged;
+    unsubscribe();
+  });
+
+  it('lets no device send pings', async () => {
+    let pings = 0;
+    let pinged = () => {};
+    const unsubscribe = bob.subscribe(() => {
+      pings++;
+      pinged();
+    });
+    await new Promise((r) => setTimeout(r, 1500)); // let the channel join
+
+    const intruder = createClient(url, anonKey, { auth: { persistSession: false } });
+    await intruder.auth.signInAnonymously();
+    // Public first: on Realtime v2.103, joining the topic publicly right after leaving it privately
+    // stops pings for everyone already listening. Hosted projects turn public channels off
+    // (docs/BACKEND.md), which rules that out; the local stack can't, so this test avoids it.
+    for (const isPrivate of [false, true]) {
+      const channel = intruder.channel(`district:${A}`, { config: { private: isPrivate } });
+      await new Promise<void>((resolve) => channel.subscribe(() => resolve())); // joined, or refused
+      await channel.send({ type: 'broadcast', event: 'change', payload: { table: 'issues' } });
+      await intruder.removeChannel(channel);
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(pings).toBe(0);
+
+    // Bob was listening all along: a real change still gets through.
+    const real = new Promise<void>((resolve) => (pinged = resolve));
+    await alice.comment(pinned, 'Still broken.');
+    await real;
     unsubscribe();
   });
 

@@ -5,7 +5,9 @@ import type {
   Category,
   District,
   DistrictBoundary,
+  HistoryEvent,
   Issue,
+  IssueReports,
   IssueUpdate,
   ScanPoint,
   Status,
@@ -37,6 +39,17 @@ interface UpdateRow {
   text: string;
   created_at: string;
   mine: boolean;
+  /** null unless the caller is staff */
+  staff_name?: string | null;
+}
+
+interface HistoryRow {
+  text: string;
+  created_at: string;
+  /** null unless the caller is staff */
+  staff_name?: string | null;
+  /** only staff ever receive true */
+  staff_only?: boolean;
 }
 
 export interface IssueRow {
@@ -63,17 +76,21 @@ export interface IssueRow {
   votes_this_week: number;
   following: number;
   confirmed_fixed: number;
+  not_fixed: number;
   duplicates_merged: number;
   city_request: {
     sr: string;
     agency: string;
     routed_to: string;
     sent_at: string;
-    sent_by: string;
+    /** null unless the caller is staff */
+    sent_by: string | null;
     last_follow_up_at: string | null;
   } | null;
   updates: UpdateRow[];
-  history: { text: string; created_at: string }[];
+  history: HistoryRow[];
+  /** Open reports; null when there are none, and always for residents. */
+  reports?: { count: number; since: string; reasons: IssueReports['reasons'] } | null;
 }
 
 interface ScanPointRow {
@@ -89,7 +106,7 @@ export interface SnapshotRow {
   district: DistrictRow;
   issues: IssueRow[];
   scan_points: ScanPointRow[];
-  me: { voted: string[]; following: string[]; confirmed: Record<string, 'yes' | 'no'> };
+  me: { voted: string[]; following: string[]; confirmed: Record<string, 'yes' | 'no'>; reported?: string[] };
 }
 
 export interface EventRow {
@@ -125,10 +142,21 @@ function mapUpdate(row: UpdateRow, districtName: string): IssueUpdate {
     text: row.text,
     date: nyDate(row.created_at),
     ...(row.mine ? { mine: true } : {}),
+    ...(row.staff_name ? { staffName: row.staff_name } : {}),
   };
 }
 
-export function mapIssue(row: IssueRow, districtName: string): Issue {
+function mapHistory(row: HistoryRow): HistoryEvent {
+  return {
+    date: nyDate(row.created_at),
+    text: row.text,
+    ...(row.staff_name ? { staffName: row.staff_name } : {}),
+    ...(row.staff_only ? { staffOnly: true } : {}),
+  };
+}
+
+/** `photoUrl` turns a stored photo name (`<uuid>.jpg` in the photos bucket) into a URL for `<img src>`. */
+export function mapIssue(row: IssueRow, districtName: string, photoUrl: (name: string) => string = (name) => name): Issue {
   const issue: Issue = {
     id: row.id,
     title: row.title,
@@ -142,13 +170,14 @@ export function mapIssue(row: IssueRow, districtName: string): Issue {
     votesThisWeek: row.votes_this_week,
     createdAt: nyDate(row.created_at),
     owner: row.owner,
-    photos: row.photos,
+    photos: row.photos.map(photoUrl),
     updates: row.updates.map((u) => mapUpdate(u, districtName)),
-    history: row.history.map((h) => ({ date: nyDate(h.created_at), text: h.text })),
+    history: row.history.map(mapHistory),
     via: row.via,
     following: row.following,
     duplicatesMerged: row.duplicates_merged,
     confirmedFixed: row.confirmed_fixed,
+    notFixed: row.not_fixed,
   };
   if (row.location_detail) issue.locationDetail = row.location_detail;
   if (row.agency) issue.agency = row.agency;
@@ -157,6 +186,7 @@ export function mapIssue(row: IssueRow, districtName: string): Issue {
   if (row.hidden) issue.hidden = true;
   if (row.hidden_reason) issue.hiddenReason = row.hidden_reason;
   if (row.merged_into) issue.mergedInto = row.merged_into;
+  if (row.reports?.count) issue.reports = { count: row.reports.count, since: nyDate(row.reports.since), reasons: row.reports.reasons };
   const r = row.city_request;
   if (r) {
     issue.cityRequest = {
@@ -164,7 +194,7 @@ export function mapIssue(row: IssueRow, districtName: string): Issue {
       agency: r.agency,
       routedTo: r.routed_to,
       sentOn: nyDate(r.sent_at),
-      sentBy: r.sent_by,
+      ...(r.sent_by ? { sentBy: r.sent_by } : {}),
       ...(r.last_follow_up_at ? { lastFollowUp: nyDate(r.last_follow_up_at) } : {}),
     };
   }
@@ -182,13 +212,13 @@ export function mapScanPoint(row: ScanPointRow): ScanPoint {
   };
 }
 
-export function mapSnapshot(row: SnapshotRow): Snapshot {
+export function mapSnapshot(row: SnapshotRow, photoUrl?: (name: string) => string): Snapshot {
   const district = mapDistrict(row.district);
   return {
     district,
-    issues: row.issues.map((i) => mapIssue(i, district.name)),
+    issues: row.issues.map((i) => mapIssue(i, district.name, photoUrl)),
     scanPoints: row.scan_points.map(mapScanPoint),
-    me: { voted: row.me.voted, following: row.me.following, confirmed: row.me.confirmed },
+    me: { voted: row.me.voted, following: row.me.following, confirmed: row.me.confirmed, reported: row.me.reported ?? [] },
   };
 }
 

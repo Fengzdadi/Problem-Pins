@@ -11,7 +11,7 @@ npm run dev
 Then open http://localhost:5173.
 
 - **Demo mode** (default when no Supabase keys are set): sample data for West Chelsea, saved in
-  your browser. Use the top bar to switch between the Resident and Organization views, and
+  your browser. Use the top bar to switch between the Resident and District office views, and
   "Reset demo" to restore the sample data. Add `?mode=demo` to any deployment's URL to get it.
 - **Live mode**: copy `.env.example` to `.env.local` and fill in the Supabase values.
 

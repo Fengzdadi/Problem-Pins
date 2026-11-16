@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, ChevronUp, LocateFixed, LocateOff, MapPin, Plus, Search, X } from 'lucide-react';
+import { Bell, ChevronUp, LocateFixed, LocateOff, MapPin, Plus, Search, Share, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { PhotoThumb, StatusTag } from '../components/ui';
-import { CATEGORIES } from '../data/meta';
+import { config, residentAccounts } from '../config';
 import { distanceMeters } from '../data/geo';
 import type { Category, Issue } from '../data/types';
-import { daysBetween, formatMeters } from '../lib/format';
+import { daysBetween, formatMeters, plural, shortDate } from '../lib/format';
 import type { AddressResult } from '../lib/geocode';
 import { useAddressSearch } from '../lib/useGeocode';
 import { useUserLocation } from '../lib/userLocation';
 import { navigate } from '../router';
 import { useStore } from '../store';
+import { BUTTON, CategoryLabel, LABEL, LINK, shareIssue } from './shared';
 
 export function VoteBox({ issue }: { issue: Issue }) {
   const { voted, vote } = useStore();
@@ -23,7 +24,7 @@ export function VoteBox({ issue }: { issue: Issue }) {
       }}
       aria-label={done ? 'You +1’d this' : '+1 this problem'}
       className={`flex w-11 shrink-0 flex-col items-center rounded-lg border py-1.5 text-sm font-semibold transition ${
-        done ? 'border-brand bg-brand-soft text-brand' : 'border-slate-200 text-ink hover:border-brand hover:text-brand'
+        done ? 'border-brand text-brand' : 'border-slate-200 text-ink hover:border-brand hover:text-brand'
       }`}
     >
       <ChevronUp className="h-4 w-4" strokeWidth={2.5} />
@@ -33,8 +34,9 @@ export function VoteBox({ issue }: { issue: Issue }) {
 }
 
 export default function MapHome() {
-  const { issues, voted, confirmed, lastCreatedId, clearLastCreated, district, track, toast } = useStore();
+  const { issues, voted, following, confirmed, lastCreatedId, clearLastCreated, district, track, toast, account } = useStore();
   const [category, setCategory] = useState<Category | 'all'>('all');
+  const [sort, setSort] = useState<'votes' | 'newest'>('votes');
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -83,18 +85,41 @@ export default function MapHome() {
     );
   }, [active, category, query]);
 
-  const ranked = [...visible].sort((a, b) => b.votes - a.votes);
+  // What got fixed lately, under the open problems: it shows that a pin leads somewhere, and each
+  // one's page asks whether the fix held. Same category filter and search as the list above.
+  const fixedLately = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return issues
+      .filter(
+        (i) =>
+          i.status === 'fixed' &&
+          Boolean(i.fixedOn) &&
+          daysBetween(i.fixedOn!) <= 30 &&
+          (category === 'all' || i.category === category) &&
+          (!q || `${i.title} ${i.locationLabel} ${i.id}`.toLowerCase().includes(q)),
+      )
+      .sort((a, b) => b.fixedOn!.localeCompare(a.fixedOn!) || b.id.localeCompare(a.id));
+  }, [issues, category, query]);
+
+  const ranked = [...visible].sort((a, b) =>
+    sort === 'votes' ? b.votes - a.votes : b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+  );
   const created = lastCreatedId ? issues.find((i) => i.id === lastCreatedId) : undefined;
   // A fresh pin centers the map when it opens; after that, searches and "locate me" take over.
   const flyTo = target ?? (created ? { lat: created.lat, lng: created.lng } : undefined);
   const showDropdown = searching && query.trim().length > 0;
   const issueMatches = showDropdown ? ranked.slice(0, 3) : [];
-  const hasPendingConfirm = issues.some((i) => i.status === 'fixed' && voted.includes(i.id) && !confirmed[i.id]);
+  // Same set as the confirm cards on "Your updates": fixed problems this device +1’d or follows.
+  const hasPendingConfirm = issues.some(
+    (i) => i.status === 'fixed' && (voted.includes(i.id) || following.includes(i.id)) && !confirmed[i.id],
+  );
 
   const chip = (selected: boolean) =>
     `flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium shadow-sm ${
-      selected ? 'border-brand bg-brand text-white' : 'border-slate-200 bg-white text-ink'
+      selected ? 'border-ink bg-ink text-white' : 'border-slate-200 bg-white text-ink'
     }`;
+  const sortTab = (selected: boolean) =>
+    `border-b-2 pb-0.5 text-sm ${selected ? 'border-ink font-semibold' : 'border-transparent font-medium text-slate-500 hover:text-ink'}`;
 
   return (
     <div className="relative h-full overflow-hidden">
@@ -134,7 +159,7 @@ export default function MapHome() {
             />
             {query && (
               <button onClick={() => setQuery('')} aria-label="Clear search">
-                <X className="h-4 w-4 text-slate-400" />
+                <X className="h-4 w-4 text-slate-500" />
               </button>
             )}
           </label>
@@ -154,7 +179,7 @@ export default function MapHome() {
           >
             {issueMatches.length > 0 && (
               <>
-                <p className="px-3 pt-2.5 font-mono text-[11px] tracking-wider text-slate-500">PROBLEMS · {ranked.length}</p>
+                <p className={`${LABEL} px-3 pt-2.5`}>Problems</p>
                 <ul>
                   {issueMatches.map((i) => (
                     <li key={i.id}>
@@ -169,7 +194,7 @@ export default function MapHome() {
             )}
             {query.trim().length >= 3 && (
               <>
-                <p className="px-3 pt-2.5 font-mono text-[11px] tracking-wider text-slate-500">ADDRESSES</p>
+                <p className={`${LABEL} px-3 pt-2.5`}>Addresses</p>
                 <ul className="pb-1">
                   {addresses.results.map((a) => (
                     <li key={a.id}>
@@ -196,18 +221,19 @@ export default function MapHome() {
           </div>
         )}
         <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
-          <button className={chip(category === 'all')} onClick={() => setCategory('all')}>
-            All <span className="opacity-70">{active.length}</span>
+          <button className={chip(category === 'all')} aria-pressed={category === 'all'} onClick={() => setCategory('all')}>
+            All
           </button>
-          {district.categories.map((c) => {
-            const count = active.filter((i) => i.category === c).length;
-            return (
-              <button key={c} className={chip(category === c)} onClick={() => setCategory(category === c ? 'all' : c)}>
-                {category !== c && <span className="h-2 w-2 rounded-[2px]" style={{ background: CATEGORIES[c].color }} />}
-                {CATEGORIES[c].label} <span className="opacity-60">{count}</span>
-              </button>
-            );
-          })}
+          {district.categories.map((c) => (
+            <button
+              key={c}
+              className={chip(category === c)}
+              aria-pressed={category === c}
+              onClick={() => setCategory(category === c ? 'all' : c)}
+            >
+              <CategoryLabel category={c} iconClass={`h-4 w-4 ${category === c ? 'text-white/70' : 'text-slate-500'}`} />
+            </button>
+          ))}
         </div>
       </div>
 
@@ -236,24 +262,58 @@ export default function MapHome() {
           <Plus className="h-5 w-5" strokeWidth={2.5} /> Pin a problem
         </button>
 
-        <button onClick={() => setExpanded(!expanded)} className="flex justify-center pb-1 pt-2" aria-label="Expand list">
+        <button onClick={() => setExpanded(!expanded)} className="flex justify-center pb-1 pt-2" aria-label={expanded ? 'Shrink list' : 'Expand list'}>
           <span className="h-1 w-9 rounded-full bg-slate-300" />
         </button>
 
         {created && (
-          <div className="mx-4 mb-2 flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            <button className="text-left" onClick={() => navigate(`/i/${created.id}`)}>
-              <span className="font-semibold">Your pin is live.</span> Neighbors can +1 it now.
-            </button>
-            <button onClick={clearLastCreated} aria-label="Dismiss">
-              <X className="h-4 w-4" />
-            </button>
+          <div className="mx-4 mb-3 rounded-lg border border-slate-200 p-3 text-sm">
+            <div className="flex items-start justify-between gap-2">
+              <p>
+                <span className="font-semibold">Your pin is live.</span> Neighbors can +1 it now.
+                {!config.notifications && (account ? ' It’s saved to your account.' : ' It stays under Your updates on this phone.')}
+                {residentAccounts && !account && (
+                  <>
+                    {' '}
+                    <a href={`#/account?next=/i/${created.id}&from=new_pin`} className={LINK}>
+                      Keep it with your email
+                    </a>
+                  </>
+                )}
+              </p>
+              <button onClick={clearLastCreated} aria-label="Dismiss">
+                <X className="h-4 w-4 text-slate-500" />
+              </button>
+            </div>
+            <div className="mt-2 flex items-center gap-4">
+              <button onClick={() => shareIssue(created, { toast, track }, 'new_pin')} className={`${BUTTON} flex items-center gap-1.5 px-3 py-1.5`}>
+                <Share className="h-4 w-4" /> Share
+              </button>
+              <button onClick={() => navigate(`/i/${created.id}`)} className={LINK}>
+                Open your pin
+              </button>
+            </div>
           </div>
         )}
 
-        <div className="flex items-center justify-between px-5 pb-2">
-          <h2 className="text-lg font-semibold">{you ? 'Most +1’d nearby' : `Most +1’d in ${district.area}`}</h2>
-          <span className="text-sm text-slate-500">{ranked.length} open</span>
+        <div className="px-5 pb-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-lg font-semibold">{plural(ranked.length, 'open problem')}</h2>
+            <div className="flex gap-3">
+              <button className={sortTab(sort === 'votes')} aria-pressed={sort === 'votes'} onClick={() => setSort('votes')}>
+                Most +1’d
+              </button>
+              <button className={sortTab(sort === 'newest')} aria-pressed={sort === 'newest'} onClick={() => setSort('newest')}>
+                Newest
+              </button>
+            </div>
+          </div>
+          <p className="mt-0.5 text-[13px] text-slate-500">
+            Pins go to {district.name} ·{' '}
+            <a href="#/about" className={LINK}>
+              About
+            </a>
+          </p>
         </div>
 
         <ul className="flex-1 overflow-y-auto px-5 pb-4">
@@ -265,17 +325,45 @@ export default function MapHome() {
             >
               <VoteBox issue={issue} />
               <div className="min-w-0 flex-1">
-                <p className="font-semibold leading-snug">{issue.title}</p>
+                <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
+                  {issue.title}
+                </a>
                 <p className="mt-0.5 text-[13px] text-slate-500">
                   <StatusTag status={issue.status} resident className="text-slate-600" /> ·{' '}
-                  {you && <>{formatMeters(distanceMeters(you, issue))} · </>}
-                  {daysBetween(issue.createdAt)} days
+                  {you && distanceMeters(you, issue) >= 10 && <>{formatMeters(distanceMeters(you, issue))} away · </>}
+                  <span className="whitespace-nowrap">pinned {shortDate(issue.createdAt)}</span>
                 </p>
               </div>
-              <PhotoThumb issue={issue} className="h-12 w-12 shrink-0 rounded-lg" />
+              {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-12 w-12 shrink-0 rounded-lg" />}
             </li>
           ))}
-          {!ranked.length && <li className="py-8 text-center text-sm text-slate-500">No open problems match.</li>}
+          {!ranked.length && (
+            <li className="py-8 text-center text-sm text-slate-500">
+              {active.length ? 'No open problems match.' : 'No open problems right now.'}
+            </li>
+          )}
+          {fixedLately.length > 0 && (
+            <li className="border-t border-slate-100 pb-1 pt-4">
+              <h3 className={LABEL}>Fixed in the last 30 days</h3>
+            </li>
+          )}
+          {fixedLately.map((issue) => (
+            <li key={issue.id} onClick={() => navigate(`/i/${issue.id}`)} className="cursor-pointer border-t border-slate-100 py-3">
+              <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
+                {issue.title}
+              </a>
+              <p className="mt-0.5 text-[13px] text-slate-500">
+                <StatusTag status="fixed" resident className="text-slate-600" /> {shortDate(issue.fixedOn!)} ·{' '}
+                <span className="whitespace-nowrap">
+                  {issue.notFixed > 0
+                    ? `${plural(issue.notFixed, 'neighbor')} ${issue.notFixed === 1 ? 'says' : 'say'} it isn’t`
+                    : issue.confirmedFixed > 0
+                      ? `${plural(issue.confirmedFixed, 'neighbor')} confirmed`
+                      : 'not confirmed yet'}
+                </span>
+              </p>
+            </li>
+          ))}
         </ul>
       </div>
     </div>

@@ -108,6 +108,16 @@ as $$
   select count(*)::integer from public.votes where issue_id = p_issue;
 $$;
 
+-- "1 neighbor", "3 neighbors": for history lines and updates residents read.
+create function private.neighbors(p_count integer)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select p_count || case when p_count = 1 then ' neighbor' else ' neighbors' end;
+$$;
+
 create function private.district_name(p_district text)
 returns text
 language sql
@@ -273,6 +283,11 @@ begin
         'confirmed_fixed', (
           select count(*) from public.fix_confirmations c where c.issue_id = i.id and c.answer = 'yes'
         ),
+        -- Only answers given since it was last marked fixed: reopening it clears them.
+        'not_fixed', (
+          select count(*) from public.fix_confirmations c
+          where c.issue_id = i.id and c.answer = 'no' and i.status = 'fixed' and c.created_at >= i.fixed_at
+        ),
         'duplicates_merged', (select count(*) from public.issues m where m.merged_into = i.id),
         'city_request', (
           select jsonb_build_object(
@@ -280,7 +295,7 @@ begin
             'agency', r.agency,
             'routed_to', r.routed_to,
             'sent_at', r.sent_at,
-            'sent_by', r.sent_by_name,
+            'sent_by', case when v_staff then r.sent_by_name end,
             'last_follow_up_at', r.last_follow_up_at
           )
           from public.city_requests r where r.issue_id = i.id
@@ -344,6 +359,7 @@ $$;
 
 -- Rate limits per device. Product settings, not experiment thresholds.
 -- create_issue: 10 per hour. comment: 20 per hour. Photo uploads: see the storage migration.
+-- Each limit takes a per-device lock before counting, so parallel requests can't slip past it.
 
 create function public.create_issue(
   p_district text,
@@ -371,6 +387,7 @@ declare
   v_description text := btrim(coalesce(p_description, ''));
   v_photos text[] := coalesce(p_photos, '{}');
   v_photo text;
+  v_scan_code text := nullif(upper(btrim(coalesce(p_scan_code, ''))), '');
 begin
   select * into d from public.districts where id = p_district;
   if not found then
@@ -401,11 +418,20 @@ begin
   if cardinality(v_photos) > 4 then
     raise exception 'Add up to 4 photos.';
   end if;
+  -- Photos are object names in our bucket (the app turns them into URLs), uploaded by this device.
   foreach v_photo in array v_photos loop
-    if v_photo !~ '^https?://[^\s]+/storage/v1/object/public/photos/[^\s]+$' then
+    if v_photo !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$'
+       or not exists (
+         select 1 from storage.objects o
+         where o.bucket_id = 'photos' and o.name = v_photo and o.owner_id = v_uid::text
+       ) then
       raise exception 'Photos have to be uploaded through Problem Pins.';
     end if;
   end loop;
+  if v_scan_code !~ '^[A-Z0-9][A-Z0-9-]{0,15}$' then
+    raise exception 'That poster code isn’t valid.';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('pp-rate:' || v_uid::text));
   if (select count(*) from public.issues where created_by = v_uid and created_at > now() - interval '1 hour') >= 10 then
     raise exception 'You’ve pinned a lot in the last hour. Try again a bit later.';
   end if;
@@ -416,7 +442,7 @@ begin
   ) values (
     p_district, v_title, v_description, p_category, p_lat, p_lng, coalesce(p_location_label, ''),
     nullif(btrim(coalesce(p_location_detail, '')), ''), v_photos, coalesce(p_via, ''),
-    nullif(btrim(coalesce(p_scan_code, '')), ''), v_uid
+    v_scan_code, v_uid
   )
   returning id into v_id;
 
@@ -436,18 +462,9 @@ as $$
 declare
   v_uid uuid := private.require_user();
   r public.issues := private.get_open_issue(p_issue);
-  d public.districts;
-  v_threshold integer;
 begin
-  insert into public.votes (issue_id, user_id) values (p_issue, v_uid) on conflict do nothing;
-  if not found then
-    return; -- already voted from this device
-  end if;
-  select * into d from public.districts where id = r.district_id;
-  v_threshold := (d.rules ->> 'reviewVotes')::integer;
-  if v_threshold is not null and private.vote_count(p_issue) = v_threshold then
-    perform private.log(p_issue, format('Passed %s neighbors · flagged to %s', v_threshold, d.name));
-  end if;
+  -- One vote per device; a second one is ignored.
+  insert into public.votes (issue_id, user_id) values (r.id, v_uid) on conflict do nothing;
 end;
 $$;
 
@@ -499,6 +516,7 @@ begin
   if char_length(v_text) > 1000 then
     raise exception 'Keep notes under 1,000 characters.';
   end if;
+  perform pg_advisory_xact_lock(hashtext('pp-rate:' || v_uid::text));
   if (
     select count(*) from public.issue_updates
     where created_by = v_uid and role = 'resident' and created_at > now() - interval '1 hour'
@@ -522,6 +540,9 @@ declare
 begin
   if p_answer is null or p_answer not in ('yes', 'no') then
     raise exception 'Answer yes or no.';
+  end if;
+  if r.status <> 'fixed' then
+    raise exception 'This hasn’t been marked fixed yet.';
   end if;
   insert into public.fix_confirmations (issue_id, user_id, answer)
   values (r.id, v_uid, p_answer)
@@ -658,8 +679,8 @@ begin
   values (
     r.id, 'partner', private.district_name(r.district_id),
     format(
-      'This is %s''s responsibility, so we filed it with 311 (SR %s) with %s neighbors attached. We''ll keep following up.',
-      v_agency, v_sr, private.vote_count(r.id)
+      'This is %s''s responsibility, so we filed it with 311 (SR %s) with %s attached. We''ll keep following up.',
+      v_agency, v_sr, private.neighbors(private.vote_count(r.id))
     ),
     auth.uid()
   );
@@ -679,7 +700,7 @@ begin
   if not found then
     raise exception '% hasn’t been sent to the City yet.', r.id;
   end if;
-  perform private.log(r.id, format('Followed up with the City, %s neighbors attached', private.vote_count(r.id)));
+  perform private.log(r.id, format('Followed up with the City, %s attached', private.neighbors(private.vote_count(r.id))));
 end;
 $$;
 
@@ -764,7 +785,7 @@ begin
   update public.issues set merged_into = target.id where merged_into = dup.id;
   update public.issues set merged_into = target.id where id = dup.id;
 
-  perform private.log(target.id, format('Merged duplicate %s · %s neighbors', dup.id, v_dup_votes));
+  perform private.log(target.id, format('Merged duplicate %s · %s', dup.id, private.neighbors(v_dup_votes)));
   perform private.log(dup.id, 'Merged into ' || target.id);
 end;
 $$;
@@ -863,7 +884,6 @@ $$;
 -- Who may call what. Functions are executable by PUBLIC by default; undo that.
 
 revoke execute on all functions in schema private from public, anon, authenticated;
-grant execute on function private.is_staff(text) to anon, authenticated;
 
 revoke execute on function
   public.get_snapshot(text),

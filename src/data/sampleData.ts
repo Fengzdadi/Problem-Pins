@@ -1,8 +1,8 @@
 import { at } from './geo';
 import type { Issue } from './types';
 
-type Seed = Omit<Issue, 'lat' | 'lng' | 'photos' | 'updates' | 'history' | 'following' | 'duplicatesMerged' | 'confirmedFixed' | 'via'> &
-  Partial<Pick<Issue, 'updates' | 'history' | 'following' | 'duplicatesMerged' | 'confirmedFixed' | 'via'>> & {
+type Seed = Omit<Issue, 'lat' | 'lng' | 'photos' | 'updates' | 'history' | 'following' | 'duplicatesMerged' | 'confirmedFixed' | 'notFixed' | 'via'> &
+  Partial<Pick<Issue, 'updates' | 'history' | 'following' | 'duplicatesMerged' | 'confirmedFixed' | 'notFixed' | 'via'>> & {
     pos: [street: number, ave: number];
   };
 
@@ -15,7 +15,8 @@ function issue({ pos, ...rest }: Seed): Issue {
     following: Math.round(rest.votes * 0.4),
     duplicatesMerged: 0,
     confirmedFixed: 0,
-    via: 'Map · problempins.org',
+    notFixed: 0,
+    via: 'the map',
     ...rest,
   };
 }
@@ -36,7 +37,7 @@ export const SAMPLE_ISSUES: Issue[] = [
     createdAt: '2026-09-28',
     owner: 'NYC DOT',
     agency: 'NYC DOT',
-    via: 'QR · BID noticeboard Q-12',
+    via: 'QR · Community noticeboard Q-12',
     following: 64,
     duplicatesMerged: 5,
     cityRequest: {
@@ -47,8 +48,7 @@ export const SAMPLE_ISSUES: Issue[] = [
       sentBy: 'Maya Ruiz',
     },
     history: [
-      { date: '2026-09-28', text: 'Pinned from the BID noticeboard QR' },
-      { date: '2026-09-30', text: 'Passed 50 neighbors · flagged to West Side District' },
+      { date: '2026-09-28', text: 'Pinned from the community noticeboard QR' },
       { date: '2026-10-02', text: 'Sent to NYC 311 · SR 311-21847390' },
     ],
     updates: [
@@ -56,7 +56,7 @@ export const SAMPLE_ISSUES: Issue[] = [
         id: 'u1',
         author: 'West Side District',
         role: 'partner',
-        text: 'These lamps belong to NYC DOT, so we filed with 311 (SR 311-21847390). We will follow up and request a community board discussion if needed.',
+        text: 'These lamps belong to NYC DOT, so we filed a 311 request (SR 311-21847390). We will follow up with DOT and raise it at the next District Service Cabinet meeting if there is no answer.',
         date: '2026-10-02',
       },
       {
@@ -79,18 +79,18 @@ export const SAMPLE_ISSUES: Issue[] = [
     votes: 74,
     votesThisWeek: 9,
     createdAt: '2026-10-03',
-    owner: 'BID crew',
+    owner: 'District office staff',
     history: [
       { date: '2026-10-03', text: 'Pinned on the map' },
-      { date: '2026-10-08', text: 'Assigned to BID crew' },
-      { date: '2026-10-10', text: 'Scheduled for repair the week of Oct 19' },
+      { date: '2026-10-08', text: 'Assigned to District office staff' },
+      { date: '2026-10-10', text: 'Scheduled for repair by the property owner, week of Oct 19' },
     ],
     updates: [
       {
         id: 'u3',
         author: 'West Side District',
         role: 'partner',
-        text: 'Our crew coned off the paver and has the reset scheduled for the week of Oct 19.',
+        text: 'The owner of the corner building is responsible for this stretch of sidewalk. Their manager has coned off the paver and scheduled the reset for the week of Oct 19.',
         date: '2026-10-10',
       },
     ],
@@ -106,10 +106,9 @@ export const SAMPLE_ISSUES: Issue[] = [
     votes: 58,
     votesThisWeek: 4,
     createdAt: '2026-09-23',
-    owner: 'BID crew',
+    owner: 'District office staff',
     history: [
       { date: '2026-09-23', text: 'Pinned on the map' },
-      { date: '2026-10-01', text: 'Passed 50 neighbors · flagged to West Side District' },
       { date: '2026-10-06', text: 'West Side District is reviewing' },
     ],
   }),
@@ -122,7 +121,7 @@ export const SAMPLE_ISSUES: Issue[] = [
     pos: [14, 0.6],
     locationLabel: 'W 14th St',
     votes: 39,
-    votesThisWeek: 11,
+    votesThisWeek: 39, // pinned this week, so every vote is from this week
     createdAt: '2026-10-08',
     owner: null,
     agency: 'NYC DEP',
@@ -145,9 +144,9 @@ export const SAMPLE_ISSUES: Issue[] = [
     pos: [18, 0.03],
     locationLabel: '9th Ave & W 18th',
     votes: 33,
-    votesThisWeek: 6,
+    votesThisWeek: 33,
     createdAt: '2026-10-10',
-    owner: 'BID crew',
+    owner: 'District office staff',
   }),
   issue({
     id: 'PP-2388',
@@ -186,7 +185,13 @@ export const SAMPLE_ISSUES: Issue[] = [
     votes: 16,
     votesThisWeek: 2,
     createdAt: '2026-09-19',
-    owner: 'BID crew',
+    owner: 'District office staff',
+    // Scheduled three weeks ago, and residents have heard nothing since.
+    history: [
+      { date: '2026-09-19', text: 'Pinned on the map' },
+      { date: '2026-09-21', text: 'Assigned to District office staff' },
+      { date: '2026-09-23', text: 'Scheduled for repair by the garage operator' },
+    ],
   }),
   issue({
     id: 'PP-2455',
@@ -210,9 +215,9 @@ export const SAMPLE_ISSUES: Issue[] = [
     pos: [17.6, -0.55],
     locationLabel: 'W 23rd St library',
     votes: 9,
-    votesThisWeek: 5,
+    votesThisWeek: 9,
     createdAt: '2026-10-11',
-    owner: 'West Side District staff',
+    owner: 'District office staff',
   }),
   issue({
     id: 'PP-2458',
@@ -289,20 +294,20 @@ export const SAMPLE_ISSUES: Issue[] = [
     votes: 22,
     votesThisWeek: 0,
     createdAt: '2026-09-04',
-    owner: 'BID crew',
+    owner: 'District office staff',
     fixedOn: '2026-09-19',
     confirmedFixed: 9,
     history: [
       { date: '2026-09-04', text: 'Pinned on the map' },
-      { date: '2026-09-08', text: 'Assigned to BID crew' },
-      { date: '2026-09-19', text: 'Marked fixed by BID crew' },
+      { date: '2026-09-08', text: 'Assigned to District office staff' },
+      { date: '2026-09-19', text: 'Marked fixed by District office staff' },
     ],
     updates: [
       {
         id: 'u5',
         author: 'Dana K.',
         role: 'resident',
-        text: "Thanks for fixing the bench by the fountain so fast. First time I've seen a report actually go somewhere.",
+        text: "Thanks for getting the bench by the fountain fixed so fast. First time I've seen a report actually go somewhere.",
         date: '2026-09-19',
       },
     ],
@@ -318,9 +323,20 @@ export const SAMPLE_ISSUES: Issue[] = [
     votes: 19,
     votesThisWeek: 0,
     createdAt: '2026-09-01',
-    owner: 'BID crew',
+    owner: 'District office staff',
     fixedOn: '2026-09-04',
     confirmedFixed: 6,
+    // The bins overflowed again: two neighbors answered that it isn't fixed, on the weekend after.
+    notFixed: 2,
+    // Two staff actions, as many seeded draws as the made-up assignment they replace, so the
+    // other sample events stay where they were (see demoEvents.ts).
+    history: [
+      { date: '2026-09-01', text: 'Pinned on the map' },
+      { date: '2026-09-02', text: 'Assigned to District office staff' },
+      { date: '2026-09-04', text: 'Marked fixed by District office staff' },
+      { date: '2026-09-12', text: 'A neighbor says it is still not fixed' },
+      { date: '2026-09-13', text: 'A neighbor says it is still not fixed' },
+    ],
   }),
   issue({
     id: 'PP-2459',

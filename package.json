@@ -10,7 +10,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:seed-sql": "node --import ./scripts/ts-hooks.ts scripts/generate-seed.ts"
+    "db:seed-sql": "node --import ./scripts/ts-hooks.ts scripts/generate-seed.ts",
+    "db:reset": "supabase db reset && npm run db:local-staff && npm run db:restart-gateway",
+    "db:local-staff": "supabase db query --local -f supabase/seed-local-staff.sql",
+    "db:restart-gateway": "docker restart supabase_kong_problem-pins"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",

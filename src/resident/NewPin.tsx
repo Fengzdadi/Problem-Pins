@@ -5,13 +5,14 @@ import { isDemo } from '../config';
 import { CATEGORIES } from '../data/meta';
 import { distanceMeters } from '../data/geo';
 import type { Category } from '../data/types';
-import { formatMeters } from '../lib/format';
+import { formatMeters, plural } from '../lib/format';
 import { labelFor } from '../lib/geocode';
 import { insideDistrict, type Point } from '../lib/geometry';
 import { useAddressSearch, usePlaceLabel } from '../lib/useGeocode';
 import { useUserLocation } from '../lib/userLocation';
 import { navigate } from '../router';
 import { useStore } from '../store';
+import { BUTTON, CategoryLabel, LABEL, LINK, goBack } from './shared';
 
 interface Photo {
   blob: Blob;
@@ -135,7 +136,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         lat: pos.lat,
         lng: pos.lng,
         locationLabel: finalLabel,
-        via: scan ? `QR · ${scan.name} ${scan.code}` : 'Map · problempins.org',
+        via: scan ? `QR · ${scan.name} ${scan.code}` : 'the map',
         scanCode: scan?.code,
       },
       photos.map((p) => p.blob),
@@ -144,43 +145,38 @@ export default function NewPin({ category: initialCategory, from }: { category: 
     if (id) navigate('/');
   };
 
-  const sectionLabel = 'mb-2 font-mono text-[11px] tracking-wider text-slate-500';
+  const sectionLabel = `${LABEL} mb-2`;
 
   return (
     <div className="flex min-h-full flex-col">
       <header className="flex items-center justify-between px-5 pb-2 pt-5">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/')} aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
-          <h1 className="text-lg font-semibold">Pin a problem</h1>
-        </div>
-        <button onClick={() => history.back()} className="text-sm text-slate-500">
+        <h1 className="text-lg font-semibold">Pin a problem</h1>
+        <button onClick={goBack} className="text-sm font-medium text-slate-600 hover:text-ink">
           Cancel
         </button>
       </header>
 
       <div className="flex-1 space-y-5 px-5 pb-6 pt-2">
         <section>
-          <h2 className={sectionLabel}>CATEGORY</h2>
-          <div className="grid grid-cols-3 gap-2">
+          <h2 className={sectionLabel}>Category</h2>
+          <div className="grid grid-cols-2 gap-2">
             {district.categories.map((c) => (
               <button
                 key={c}
                 onClick={() => setCategory(c)}
-                className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium ${
-                  category === c ? 'border-brand bg-brand-soft text-brand' : 'border-slate-200 hover:border-slate-300'
+                aria-pressed={category === c}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm ${
+                  category === c ? 'border-ink font-semibold ring-1 ring-ink' : 'border-slate-200 font-medium hover:border-slate-300'
                 }`}
               >
-                <span className="h-2 w-2 rounded-[2px]" style={{ background: CATEGORIES[c].color }} />
-                {CATEGORIES[c].label}
+                <CategoryLabel category={c} iconClass={`h-4 w-4 ${category === c ? 'text-ink' : 'text-slate-500'}`} />
               </button>
             ))}
           </div>
         </section>
 
         <section>
-          <h2 className={sectionLabel}>LOCATION</h2>
+          <h2 className={sectionLabel}>Location</h2>
           <div className="overflow-hidden rounded-xl border border-slate-200">
             <div className="h-48">
               <IssueMap
@@ -204,7 +200,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
                   )}
                 </p>
               </div>
-              {pos && <span className="shrink-0 text-xs font-medium text-brand">Drag or tap to adjust</span>}
+              {pos && <span className="shrink-0 text-xs text-slate-500">Drag or tap to adjust</span>}
             </div>
             <div className="border-t border-slate-100">
               <label className="flex items-center gap-2 px-3">
@@ -218,7 +214,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
                 />
                 {query && (
                   <button onClick={() => setQuery('')} aria-label="Clear address search">
-                    <X className="h-4 w-4 text-slate-400" />
+                    <X className="h-4 w-4 text-slate-500" />
                   </button>
                 )}
               </label>
@@ -248,7 +244,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         </section>
 
         {outside && (
-          <section className="rounded-xl border border-slate-300 bg-slate-50 p-4">
+          <section className="rounded-xl border border-slate-200 p-4">
             <p className="font-semibold">Outside {district.name}</p>
             <p className="mt-1 text-sm text-slate-700">
               {district.name} handles problems in {district.area} only, so it can’t take this pin. For other places in New
@@ -258,18 +254,19 @@ export default function NewPin({ category: initialCategory, from }: { category: 
               href="https://portal.311.nyc.gov/"
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-3 inline-block text-sm font-semibold text-brand"
+              className={`${LINK} mt-3 inline-block text-sm`}
             >
-              Report it to NYC 311 →
+              Report it to NYC 311
             </a>
           </section>
         )}
 
         {similar && (
-          <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-            <p className="font-semibold text-amber-800">Similar pin nearby</p>
-            <p className="mt-1 text-sm text-slate-700">
-              “{similar.issue.title}” · {similar.issue.votes} neighbors · {formatMeters(similar.d)} away
+          <section className="rounded-xl border border-slate-200 p-4">
+            <p className="font-semibold">Similar pin nearby</p>
+            <p className="mt-1 text-sm text-slate-700">“{similar.issue.title}”</p>
+            <p className="text-sm text-slate-700">
+              {plural(similar.issue.votes, 'neighbor')} · {formatMeters(similar.d)} away
             </p>
             <div className="mt-3 flex items-center gap-4">
               <button
@@ -277,7 +274,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
                   store.vote(similar.issue.id, 'similar');
                   navigate(`/i/${similar.issue.id}`);
                 }}
-                className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white"
+                className={`${BUTTON} flex items-center gap-1.5 px-3 py-2 text-sm`}
               >
                 <ChevronUp className="h-4 w-4" strokeWidth={2.5} /> +1 that instead
               </button>
@@ -289,17 +286,19 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         )}
 
         <section>
-          <h2 className={sectionLabel}>TITLE</h2>
+          <h2 className={sectionLabel}>Title</h2>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
+            maxLength={120}
             placeholder="e.g. Sandwich board blocks the curb cut"
-            className="h-12 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none focus:border-brand"
+            aria-label="Title"
+            className="h-12 w-full rounded-xl border border-slate-200 px-3 text-[15px] outline-none focus:border-ink"
           />
         </section>
 
         <section>
-          <h2 className={sectionLabel}>PHOTOS · {photos.length}</h2>
+          <h2 className={sectionLabel}>Photos</h2>
           <div className="flex gap-2">
             {photos.map((p, idx) => (
               <div key={p.preview} className="relative">
@@ -316,7 +315,7 @@ export default function NewPin({ category: initialCategory, from }: { category: 
             {photos.length < 4 && (
               <button
                 onClick={() => fileInput.current?.click()}
-                className="flex h-[68px] w-[68px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-xs text-slate-500"
+                className="flex h-[68px] w-[68px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 text-xs text-slate-600 hover:border-slate-400"
               >
                 <Camera className="mb-1 h-5 w-5" /> Add
               </button>
@@ -337,13 +336,15 @@ export default function NewPin({ category: initialCategory, from }: { category: 
         </section>
 
         <section>
-          <h2 className={sectionLabel}>WHAT’S WRONG?</h2>
+          <h2 className={sectionLabel}>What’s wrong?</h2>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
+            maxLength={2000}
             placeholder="What did you see, and when?"
-            className="w-full rounded-xl border border-slate-200 p-3 text-[15px] outline-none focus:border-brand"
+            aria-label="What’s wrong?"
+            className="w-full rounded-xl border border-slate-200 p-3 text-[15px] outline-none focus:border-ink"
           />
         </section>
       </div>

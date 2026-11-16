@@ -1,8 +1,11 @@
-import { ArrowLeft, Check, ChevronUp, Landmark, Send, User } from 'lucide-react';
-import { Logo } from '../components/ui';
-import { daysBetween, shortDate, today } from '../lib/format';
+import { ArrowLeft, Check, Landmark, Send, User } from 'lucide-react';
+import { Logo, StatusTag } from '../components/ui';
+import { config, residentAccounts } from '../config';
+import { STATUSES } from '../data/meta';
+import { daysBetween, plural, shortDate, today } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
+import { FixQuestion, LABEL, LINK } from './shared';
 
 interface FeedItem {
   key: string;
@@ -10,23 +13,24 @@ interface FeedItem {
   date: string;
   title: string;
   body: string;
-  kind: 'partner' | 'fixed' | 'city' | 'vote' | 'resident' | 'event';
+  kind: 'district' | 'fixed' | 'city' | 'resident' | 'event';
 }
 
+// Color only where it is a status: a fix, or a hand-off to the City.
 const ICONS = {
-  partner: { Icon: Landmark, cls: 'bg-violet-100 text-violet-700' },
-  fixed: { Icon: Check, cls: 'bg-emerald-100 text-emerald-700' },
-  city: { Icon: Send, cls: 'bg-orange-100 text-brand' },
-  vote: { Icon: ChevronUp, cls: 'bg-slate-100 text-slate-600' },
-  resident: { Icon: User, cls: 'bg-slate-100 text-slate-600' },
-  event: { Icon: Check, cls: 'bg-slate-100 text-slate-600' },
+  district: { Icon: Landmark, color: undefined },
+  fixed: { Icon: Check, color: STATUSES.fixed.color },
+  city: { Icon: Send, color: STATUSES.sent_to_city.color },
+  resident: { Icon: User, color: undefined },
+  event: { Icon: Check, color: undefined },
 };
 
 export default function Updates() {
   const store = useStore();
   const now = today();
+  // A problem is here while this phone pinned it, +1’d it or follows it.
   const followedIds = new Set([...store.voted, ...store.following]);
-  const followed = store.issues.filter((i) => followedIds.has(i.id));
+  const followed = store.issues.filter((i) => followedIds.has(i.id) || i.isUserReport);
   const toConfirm = followed.filter((i) => i.status === 'fixed' && !store.confirmed[i.id]);
 
   const feed: FeedItem[] = followed.flatMap((issue) => [
@@ -38,21 +42,22 @@ export default function Updates() {
         date: u.date,
         title: u.role === 'partner' ? `${u.author} posted an update` : `${u.author} added a note`,
         body: u.text,
-        kind: u.role === 'partner' ? 'partner' : 'resident',
+        kind: u.role === 'partner' ? 'district' : 'resident',
       })),
     ...issue.history
-      .filter((h) => !h.text.startsWith('Pinned'))
-      .map<FeedItem>((h, idx) => ({
-        key: `${issue.id}-h${idx}`,
-        issueId: issue.id,
-        date: h.date,
-        title: h.text.startsWith('Marked fixed') ? h.text : h.text.split(' · ')[0],
-        body: issue.title,
-        kind: h.text.startsWith('Marked fixed') ? 'fixed' : /City|311/.test(h.text) ? 'city' : 'event',
-      })),
-    ...(store.voted.includes(issue.id) && !issue.isUserReport
-      ? [{ key: `${issue.id}-vote`, issueId: issue.id, date: now, title: 'You +1’d a problem', body: issue.title, kind: 'vote' as const }]
-      : []),
+      .filter((h) => !h.staffOnly && !h.text.startsWith('Pinned'))
+      .map<FeedItem>((h, idx) => {
+        const fixed = h.text.startsWith('Marked fixed');
+        return {
+          key: `${issue.id}-h${idx}`,
+          issueId: issue.id,
+          date: h.date,
+          // The log names the problem's owner, which can be a City agency. The district office marks it here.
+          title: fixed ? `Marked fixed by ${store.district.name}` : h.text.split(' · ')[0],
+          body: issue.title,
+          kind: fixed ? 'fixed' : /City|311/.test(h.text) ? 'city' : 'event',
+        };
+      }),
   ]);
   feed.sort((a, b) => b.date.localeCompare(a.date));
 
@@ -61,24 +66,22 @@ export default function Updates() {
 
   const Group = ({ label, items }: { label: string; items: FeedItem[] }) =>
     items.length ? (
-      <section className="mt-5">
-        <h2 className="mb-1 font-mono text-[11px] tracking-wider text-slate-500">{label}</h2>
+      <section className="mt-6">
+        <h2 className={LABEL}>{label}</h2>
         {items.map((f) => {
-          const { Icon, cls } = ICONS[f.kind];
+          const { Icon, color } = ICONS[f.kind];
           return (
             <button
               key={f.key}
               onClick={() => navigate(`/i/${f.issueId}`)}
               className="flex w-full gap-3 border-b border-slate-100 py-3 text-left"
             >
-              <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${cls}`}>
-                <Icon className="h-4 w-4" />
-              </span>
+              <Icon className="mt-1 h-4 w-4 shrink-0 text-slate-500" style={{ color }} />
               <span className="min-w-0 flex-1">
                 <span className="block font-semibold">{f.title}</span>
                 <span className="line-clamp-2 block text-sm text-slate-600">{f.body}</span>
               </span>
-              <span className="font-mono text-[11px] text-slate-400">{shortDate(f.date)}</span>
+              <span className="pt-0.5 text-xs text-slate-500">{shortDate(f.date)}</span>
             </button>
           );
         })}
@@ -87,60 +90,91 @@ export default function Updates() {
 
   return (
     <div className="px-5 pb-8 pt-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/')} aria-label="Back to map">
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <Logo />
-        </div>
-        <span className="font-mono text-xs text-slate-400">{shortDate(now)}</span>
+      <div className="mb-6 flex items-center gap-3">
+        <button onClick={() => navigate('/')} aria-label="Back to map">
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <Logo />
       </div>
 
-      <h1 className="text-3xl font-bold">Your updates</h1>
-      <p className="mt-1 text-slate-500">
-        Sent to your phone · following {followed.length} problem{followed.length === 1 ? '' : 's'}
-      </p>
+      <h1 className="text-2xl font-bold">Your updates</h1>
+      {followed.length > 0 && (
+        <p className="mt-1 text-slate-600">
+          {/* Signed in, the line below says where they are kept. */}
+          {store.account ? '' : config.notifications ? 'Sent to your phone · ' : 'On this phone · '}
+          {plural(followed.length, 'problem')} you pinned, +1’d or follow
+        </p>
+      )}
+      {residentAccounts && (
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          {store.account ? (
+            <>
+              Signed in as {store.account.email} ·{' '}
+              <a href="#/account" className={LINK}>
+                Account
+              </a>
+            </>
+          ) : followed.length ? (
+            <>
+              <a href="#/account?next=/updates&from=updates" className={LINK}>
+                Keep this list with your email
+              </a>
+              , so a new phone or a cleared browser still has it.
+            </>
+          ) : (
+            <>
+              Saved problems with your email before?{' '}
+              <a href="#/account?next=/updates&from=updates" className={LINK}>
+                Sign in
+              </a>
+            </>
+          )}
+        </p>
+      )}
 
       {toConfirm.map((issue) => (
-        <div key={issue.id} className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-          <p className="flex items-center gap-2 text-lg font-semibold">
-            <Check className="h-5 w-5 text-emerald-700" /> Is “{issue.title}” fixed?
-          </p>
-          <p className="mt-1 text-sm text-slate-700">
-            {issue.owner ?? 'The District'} marked this fixed. You +1’d it; help confirm whether it’s really done.
-          </p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              onClick={async () => {
-                if (await store.confirmFix(issue.id, 'yes')) store.toast('Thanks for confirming!');
-              }}
-              className="rounded-lg bg-emerald-700 py-2.5 font-semibold text-white"
-            >
-              Yes, it’s fixed
-            </button>
-            <button
-              onClick={async () => {
-                if (await store.confirmFix(issue.id, 'no')) store.toast(`Got it. We’ll let ${store.district.name} know.`);
-              }}
-              className="rounded-lg border border-slate-200 bg-white py-2.5 font-semibold"
-            >
-              Still broken
-            </button>
-          </div>
+        <div key={issue.id} className="mt-4 rounded-xl border border-slate-200 p-4">
+          <FixQuestion issue={issue} named>
+            <p className="mt-1 text-sm text-slate-600">
+              {store.district.name} marked this fixed{issue.fixedOn ? ` on ${shortDate(issue.fixedOn)}` : ''}. You{' '}
+              {issue.isUserReport ? 'pinned' : store.voted.includes(issue.id) ? '+1’d' : 'followed'} it; help confirm whether it’s
+              really done.
+            </p>
+          </FixQuestion>
         </div>
       ))}
 
-      <Group label="TODAY" items={todays} />
-      <Group label="EARLIER" items={earlier} />
+      <Group label="Today" items={todays} />
+      <Group label="Earlier" items={earlier} />
+
+      {/* What the feed is about. The device doesn't record when a +1 or a follow happened, so
+          these are a plain list with each problem's status today, not dated events. */}
+      {followed.length > 0 && (
+        <section className="mt-6">
+          <h2 className={LABEL}>Your problems</h2>
+          {followed.map((issue) => (
+            <button
+              key={issue.id}
+              onClick={() => navigate(`/i/${issue.id}`)}
+              className="block w-full border-b border-slate-100 py-3 text-left"
+            >
+              <span className="block font-semibold">{issue.title}</span>
+              <span className="block text-sm text-slate-600">
+                <StatusTag status={issue.status} resident /> ·{' '}
+                {issue.isUserReport ? 'you pinned it' : store.voted.includes(issue.id) ? 'you +1’d it' : 'you follow it'}
+              </span>
+            </button>
+          ))}
+        </section>
+      )}
 
       {!followed.length && (
-        <div className="mt-10 rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-500">
-          +1 or pin a problem and its updates will show up here.
-          <button onClick={() => navigate('/')} className="mt-3 block w-full font-semibold text-brand">
+        <p className="mt-8 text-slate-600">
+          +1, follow or pin a problem and its updates will show up here.{' '}
+          <button onClick={() => navigate('/')} className={LINK}>
             Open the map
           </button>
-        </div>
+        </p>
       )}
     </div>
   );

@@ -1,5 +1,7 @@
+import { labelClass } from '../components/ui';
 import { CATEGORIES } from '../data/meta';
 import { useStore } from '../store';
+import { TODO_GROUPS } from './dashboard';
 import Dialog from './Dialog';
 
 /** District settings, read-only. For the pilot they are set up by the Problem Pins team, not edited here. */
@@ -7,20 +9,20 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const { district, mode } = useStore();
   const { rules } = district;
   const section = 'border-t border-slate-100 py-3 first:border-t-0 first:pt-0';
-  const heading = 'mb-1.5 font-mono text-[10px] tracking-wider text-slate-500';
+  const heading = `${labelClass} mb-1.5`;
 
   return (
-    <Dialog title="District settings" label={district.name.toUpperCase()} onClose={onClose}>
+    <Dialog title="District settings" label={district.name} onClose={onClose}>
       <div className="text-sm">
         <div className={section}>
-          <p className={heading}>DISTRICT</p>
+          <p className={heading}>District</p>
           <dl className="grid grid-cols-[110px_1fr] gap-y-1">
             <dt className="text-slate-500">Name</dt>
             <dd className="font-medium">{district.name}</dd>
             <dt className="text-slate-500">Area</dt>
             <dd>{district.area}</dd>
-            <dt className="text-slate-500">Contact</dt>
-            <dd>{district.contactEmail ?? <span className="text-slate-400">Not set</span>}</dd>
+            <dt className="text-slate-500">Office email</dt>
+            <dd>{district.contactEmail ?? <span className="text-slate-500">Not set</span>}</dd>
             <dt className="text-slate-500">Boundary</dt>
             <dd>{district.boundary ? 'Pins outside it are refused' : 'None, pins are accepted anywhere'}</dd>
             <dt className="text-slate-500">Data</dt>
@@ -28,30 +30,26 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           </dl>
         </div>
         <div className={section}>
-          <p className={heading}>TEAMS WORK CAN BE ASSIGNED TO</p>
-          <ul className="flex flex-wrap gap-1.5">
-            {district.teams.map((t) => (
-              <li key={t} className="rounded-md bg-slate-100 px-2 py-1">
-                {t}
-              </li>
-            ))}
-          </ul>
+          <p className={heading}>Who issues can be assigned to</p>
+          <p>{district.teams.join(', ')}</p>
         </div>
         <div className={section}>
-          <p className={heading}>CATEGORIES RESIDENTS CAN PICK</p>
+          <p className={heading}>Categories residents can pick</p>
           <p>{district.categories.map((c) => CATEGORIES[c].label).join(', ')}</p>
         </div>
         <div className={section}>
-          <p className={heading}>WHEN AN ISSUE NEEDS ATTENTION</p>
-          <ul className="list-disc space-y-1 pl-4 text-slate-700">
-            <li>
-              No owner and {rules.reviewVotes}+ votes, or open {rules.reviewDays}+ days
-            </li>
-            <li>City-owned with {rules.forwardVotes}+ votes and not yet sent to 311</li>
-            <li>
-              Sent to 311, {rules.reviewVotes}+ votes and no follow-up in {rules.cityNoReplyDays}+ days
-            </li>
+          <p className={heading}>What goes on the to-do list</p>
+          <ul className="space-y-1.5">
+            {TODO_GROUPS.map((g) => (
+              <li key={g.kind}>
+                <p className="font-medium">{g.title}</p>
+                <p className="text-slate-500">{g.rule(rules)}</p>
+              </li>
+            ))}
           </ul>
+          <p className="mt-1.5 text-xs text-slate-500">
+            In each group the longest wait comes first. How many neighbors +1’d only breaks ties; it never puts an issue on the list.
+          </p>
         </div>
         <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
           These are set up with the Problem Pins team during the pilot. To change one, ask them; there’s no editor here yet.

@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
 import { Check, ChevronUp } from 'lucide-react';
 import { Logo, PhotoThumb, StatusTag } from '../components/ui';
-import { CATEGORIES } from '../data/meta';
+import { config } from '../config';
 import { distanceMeters } from '../data/geo';
-import { daysBetween, formatMeters, shortDate } from '../lib/format';
+import { formatMeters, plural, shortDate } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
+import { BUTTON, CategoryLabel, FixQuestion, LABEL, LINK } from './shared';
 
 /** How close an open problem must be to show as "nearby" when the poster has no linked problem. */
 const NEARBY_METERS = 150;
@@ -55,8 +56,8 @@ export default function ScanLanding({ code, source }: { code: string; source: st
           The poster you scanned (<span className="font-mono">{code || 'no code'}</span>) isn’t linked to a spot anymore. You can still pin a
           problem on the {district.area} map.
         </p>
-        <button onClick={() => navigate('/')} className="mt-5 font-semibold text-brand">
-          Open the map →
+        <button onClick={() => navigate('/')} className={`${LINK} mt-5`}>
+          Open the map
         </button>
       </div>
     );
@@ -64,63 +65,56 @@ export default function ScanLanding({ code, source }: { code: string; source: st
 
   return (
     <div className="px-5 pb-8 pt-8">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex items-center gap-3">
         <Logo />
-        <span className="text-sm text-slate-500">with {district.name}</span>
+        <span className="flex-1 text-right text-sm leading-snug text-slate-500">with {district.name}</span>
       </div>
 
-      <p className="font-mono text-[11px] tracking-wider text-slate-500">YOU SCANNED</p>
+      <p className={LABEL}>You scanned</p>
       <h1 className="mt-1 text-2xl font-bold">{point.name}</h1>
       <p className="text-slate-600">{point.detail}</p>
 
       {merged && issue && (
         <p className="mt-5 text-sm text-slate-600">
-          The problem reported here (<span className="font-mono">{linked!.id}</span>) was combined with a matching report, so votes
+          The problem reported here (<span className="font-mono">{linked!.id}</span>) was combined with a matching report, so +1s
           count in one place.
         </p>
       )}
 
       {issue && issue.status === 'fixed' ? (
         <div className="mt-5 rounded-xl border border-slate-200 p-4">
-          <p className="font-mono text-[11px] tracking-wider text-slate-500">REPORTED HERE · FIXED</p>
+          <p className={LABEL}>Reported here</p>
           <div className="mt-2 flex gap-3">
-            <div className="flex-1">
-              <p className="text-lg font-semibold leading-snug">{issue.title}</p>
-              <p className="mt-2 text-sm text-slate-500">
-                <StatusTag status="fixed" resident className="text-ink" />
-                {issue.fixedOn && <> on {shortDate(issue.fixedOn)}</>}
-                {issue.confirmedFixed > 0 && (
-                  <>
-                    {' '}
-                    · {issue.confirmedFixed} neighbor{issue.confirmedFixed === 1 ? '' : 's'} confirmed
-                  </>
-                )}
-              </p>
-            </div>
-            <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />
+            <p className="flex-1 text-lg font-semibold leading-snug">{issue.title}</p>
+            {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />}
           </div>
-          <p className="mt-3 text-sm text-slate-600">If it’s broken again, pin it below so {district.name} sees it.</p>
-          <button onClick={() => navigate(`/i/${issue.id}`)} className="mt-3 w-full text-center font-semibold text-brand">
-            See the fix
+          <p className="mt-2 text-sm text-slate-500">
+            <StatusTag status="fixed" resident className="text-ink" />
+            {issue.fixedOn && <> on {shortDate(issue.fixedOn)}</>}
+            {issue.confirmedFixed > 0 && <> · {plural(issue.confirmedFixed, 'neighbor')} confirmed</>}
+          </p>
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <FixQuestion issue={issue} />
+          </div>
+          <button onClick={() => navigate(`/i/${issue.id}`)} className={`${LINK} mt-4`}>
+            See what happened with it
           </button>
         </div>
       ) : issue ? (
         <div className="mt-5 rounded-xl border border-slate-200 p-4">
-          <p className="font-mono text-[11px] tracking-wider text-slate-500">ALREADY REPORTED HERE</p>
+          <p className={LABEL}>Already reported here</p>
           <div className="mt-2 flex gap-3">
-            <div className="flex-1">
-              <p className="text-lg font-semibold leading-snug">{issue.title}</p>
-              <p className="mt-2 text-sm text-slate-500">
-                <StatusTag status={issue.status} resident className="text-ink" /> · {issue.votes} neighbors ·{' '}
-                {daysBetween(issue.createdAt)} days
-              </p>
-            </div>
-            <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />
+            <p className="flex-1 text-lg font-semibold leading-snug">{issue.title}</p>
+            {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />}
           </div>
+          <p className="mt-2 text-[13px] text-slate-500">
+            <StatusTag status={issue.status} resident className="text-ink" /> · {plural(issue.votes, 'neighbor')} ·{' '}
+            <span className="whitespace-nowrap">pinned {shortDate(issue.createdAt)}</span>
+          </p>
           {voted ? (
-            <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border-2 border-brand bg-brand-soft py-3 font-semibold text-brand">
-              <Check className="h-5 w-5" /> You +1’d this · {issue.votes} neighbors
-            </div>
+            <p className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-brand py-3 font-semibold text-brand">
+              <Check className="h-5 w-5" strokeWidth={2.5} /> You +1’d this
+            </p>
           ) : (
             <button
               onClick={() => store.vote(issue.id, voteSource)}
@@ -129,14 +123,14 @@ export default function ScanLanding({ code, source }: { code: string; source: st
               <ChevronUp className="h-5 w-5" strokeWidth={2.5} /> +1 This is my problem too
             </button>
           )}
-          <button onClick={() => navigate(`/i/${issue.id}`)} className="mt-3 w-full text-center font-semibold text-brand">
+          <button onClick={() => navigate(`/i/${issue.id}`)} className={`${LINK} mt-3`}>
             See what’s happening with it
           </button>
         </div>
       ) : (
         nearby.length > 0 && (
           <div className="mt-5">
-            <p className="font-mono text-[11px] tracking-wider text-slate-500">ALREADY REPORTED NEARBY</p>
+            <p className={LABEL}>Already reported nearby</p>
             <ul className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200">
               {nearby.map(({ issue: i, d }) => {
                 const mine = store.voted.includes(i.id);
@@ -145,15 +139,13 @@ export default function ScanLanding({ code, source }: { code: string; source: st
                     <button onClick={() => navigate(`/i/${i.id}`)} className="min-w-0 flex-1 text-left">
                       <p className="truncate font-medium">{i.title}</p>
                       <p className="text-xs text-slate-500">
-                        {i.votes} neighbors · {formatMeters(d)} away
+                        {plural(i.votes, 'neighbor')} · {formatMeters(d)} away
                       </p>
                     </button>
                     <button
                       onClick={() => store.vote(i.id, voteSource)}
                       disabled={mine}
-                      className={`shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold ${
-                        mine ? 'bg-brand-soft text-brand' : 'border border-slate-200 hover:border-slate-300'
-                      }`}
+                      className={`shrink-0 px-3 py-1.5 text-sm ${mine ? 'font-semibold text-brand' : BUTTON}`}
                     >
                       {mine ? '+1’d' : '+1'}
                     </button>
@@ -168,7 +160,7 @@ export default function ScanLanding({ code, source }: { code: string; source: st
       {issue || nearby.length > 0 ? (
         <div className="my-5 flex items-center gap-3 text-sm text-slate-500">
           <span className="h-px flex-1 bg-slate-200" />
-          {issue?.status === 'fixed' ? 'broken again, or something else?' : 'or report something else here'}
+          or report something else here
           <span className="h-px flex-1 bg-slate-200" />
         </div>
       ) : (
@@ -182,15 +174,19 @@ export default function ScanLanding({ code, source }: { code: string; source: st
             onClick={() => navigate(`/new?cat=${c}&from=${code}`)}
             className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2.5 text-sm font-medium hover:border-slate-300"
           >
-            <span className="h-2 w-2 rounded-[2px]" style={{ background: CATEGORIES[c].color }} />
-            {CATEGORIES[c].label}
+            <CategoryLabel category={c} />
           </button>
         ))}
       </div>
 
-      <p className="mt-5 text-sm text-slate-500">No app or account. Leave a phone number or email only if you want updates.</p>
-      <button onClick={() => navigate('/')} className="mt-4 text-sm font-semibold text-brand">
-        Explore the neighborhood map →
+      <p className="mt-5 text-sm text-slate-500">
+        {config.notifications ? 'No app or account. Leave a phone number or email only if you want updates.' : 'No app or account needed.'}{' '}
+        <a href="#/about" className={LINK}>
+          About Problem Pins
+        </a>
+      </p>
+      <button onClick={() => navigate('/')} className={`${LINK} mt-3 text-sm`}>
+        Explore the neighborhood map
       </button>
     </div>
   );

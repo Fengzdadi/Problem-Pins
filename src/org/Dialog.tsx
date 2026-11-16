@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { labelClass } from '../components/ui';
 
 /**
  * A modal on the native `<dialog>` element (focus trap, Esc to close, top layer above the map).
@@ -14,8 +15,8 @@ export default function Dialog({
   width = 'sm:max-w-lg',
 }: {
   title: string;
-  /** Small mono line above the title, e.g. the issue ID. */
-  label?: string;
+  /** Small line above the title, e.g. the issue ID. */
+  label?: ReactNode;
   onClose: () => void;
   children: ReactNode;
   width?: string;
@@ -52,7 +53,7 @@ export default function Dialog({
       <div className="max-h-[85dvh] overflow-y-auto">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white px-5 py-4">
           <div className="min-w-0">
-            {label && <p className="font-mono text-[10px] tracking-wider text-slate-500">{label}</p>}
+            {label && <p className={labelClass}>{label}</p>}
             <h2 className="text-lg font-bold leading-snug">{title}</h2>
           </div>
           <button onClick={onClose} aria-label="Close" className="-mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg hover:bg-slate-100">

@@ -7,6 +7,7 @@ import type {
   FollowContact,
   Issue,
   MyState,
+  ReportReason,
   ScanPoint,
   StaffUser,
   Status,
@@ -25,6 +26,8 @@ import type {
  * - Counts (`votes`, `votesThisWeek`, `following`, ...) are derived from records, never set.
  * - The backend, not the browser, generates issue IDs (`PP-2461`) and timestamps.
  * - Staff methods fail unless a staff user is signed in (live mode).
+ * - Staff-only data (reports, staff names on history, updates and City requests, staff-only
+ *   history lines) is only in a staff snapshot. Every staff action records who did it.
  */
 export interface Backend {
   readonly mode: DataMode;
@@ -41,9 +44,43 @@ export interface Backend {
   uploadPhoto(photo: Blob): Promise<string>;
   /** Idempotent: one vote per device per issue. */
   vote(issueId: string): Promise<void>;
+  /** Takes back this device's +1. Refused on the device's own pin, whose +1 stays. */
+  unvote(issueId: string): Promise<void>;
   follow(issueId: string, contact?: FollowContact): Promise<void>;
+  /** Stops following and forgets any contact this device left for the issue. */
+  unfollow(issueId: string): Promise<void>;
   comment(issueId: string, text: string): Promise<void>;
+  /** Deletes a note this device wrote (`mine`). */
+  deleteNote(issueId: string, noteId: string): Promise<void>;
   confirmFix(issueId: string, answer: 'yes' | 'no'): Promise<void>;
+  /**
+   * The device that pinned an issue takes it off the map, while the office hasn't acted on it and
+   * no other device has +1’d it (`removalBlocker` in src/lib/ownPin.ts). Not deleted: it is hidden
+   * with the reason `REMOVED_BY_PINNER`, so staff still find it under Hidden and can restore it.
+   */
+  removeIssue(issueId: string): Promise<void>;
+  /** One report per device per issue; a second one is ignored. Only staff see reports. */
+  reportIssue(issueId: string, reason: ReportReason): Promise<void>;
+
+  // ---- Resident accounts (optional; `residentAccounts` in config, docs/BACKEND.md) ----
+  /**
+   * Emails a 6-digit code that signs this device in to `email` (a new account, or one made on
+   * another phone). The demo sends no email and resolves to the code, so the screen can show it.
+   * Refused while staff are signed in on the device or an account already is.
+   */
+  requestResidentCode(email: string): Promise<{ demoCode?: string }>;
+  /**
+   * Signs this device in. A new account keeps what the device has done (same identity); a returning
+   * one brings back its records and takes in the device's own, counting one person once.
+   */
+  verifyResidentCode(email: string, code: string): Promise<{ returning: boolean }>;
+  /** Takes the account's records off this device, which starts over as a new one. Signing in again brings them back. */
+  signOutResident(): Promise<void>;
+  /**
+   * Forgets the email and signs the account out everywhere. Its records stay on the map and on this
+   * device, which keeps them without an email.
+   */
+  deleteResidentAccount(): Promise<void>;
 
   // ---- Staff ----
   postUpdate(issueId: string, text: string, status?: Status): Promise<void>;
@@ -52,8 +89,11 @@ export interface Backend {
   /** Records a 311 request staff filed. `request` is required in live mode (the real SR number). */
   sendToCity(issueId: string, request?: CityRequestInput): Promise<void>;
   nudgeCity(issueId: string): Promise<void>;
+  /** Also settles the issue's open reports: hiding is one answer to them. */
   hideIssue(issueId: string, reason: string): Promise<void>;
   unhideIssue(issueId: string): Promise<void>;
+  /** Keeps the pin up and settles its open reports, which takes it off the to-do list. */
+  dismissReports(issueId: string): Promise<void>;
   /** Moves votes and follows from the duplicate onto `intoId` and hides the duplicate. */
   mergeIssue(duplicateId: string, intoId: string): Promise<void>;
   /** Creates or updates by `code`. */
@@ -93,7 +133,7 @@ export interface NewIssueDraft {
   locationDetail?: string;
   /** URLs returned by `uploadPhoto`. */
   photos: string[];
-  /** Human-readable source, e.g. "QR · BID noticeboard, W 16th St Q-12" or "Map · problempins.org". */
+  /** Human-readable source, e.g. "QR · Community noticeboard, W 16th St Q-12" or "the map". */
   via: string;
   /** Set when the pin started from a QR scan. */
   scanCode?: string;

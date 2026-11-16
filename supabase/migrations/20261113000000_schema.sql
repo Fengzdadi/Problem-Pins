@@ -29,7 +29,7 @@ create table public.districts (
     and categories <@ array['lighting', 'seating', 'accessibility', 'litter', 'noise', 'other']
   ),
   teams text[] not null default '{}',
-  -- AttentionRules: { reviewVotes, reviewDays, forwardVotes, cityNoReplyDays }
+  -- AttentionRules (src/data/types.ts): { cityNoReplyDays, quietDays }
   rules jsonb not null,
   contact_email text,
   created_at timestamptz not null default now()
@@ -189,6 +189,7 @@ create table public.events (
 );
 
 create index events_district_at_idx on public.events (district_id, at);
+create index events_user_at_idx on public.events (user_id, at);
 
 -- ---------------------------------------------------------------------------
 -- Privileges. Start from nothing (local and hosted projects have different defaults),
@@ -197,14 +198,14 @@ create index events_district_at_idx on public.events (district_id, at);
 revoke all on all tables in schema public from anon, authenticated;
 revoke all on sequence public.issue_number_seq from anon, authenticated;
 
+-- Everything else is read through get_snapshot and list_events (security definer), which leave
+-- out device ids (`created_by`, `user_id`). With no direct reads, not even staff can link one
+-- device's pins, notes and app events.
 grant select on public.districts to anon, authenticated;
 grant select on public.staff to authenticated;
-grant select on public.issues, public.issue_updates, public.issue_history, public.city_requests,
-  public.scan_points, public.votes, public.follows, public.fix_confirmations, public.events
-  to authenticated;
 grant insert (district_id, name, issue_id, scan_code, props) on public.events to authenticated;
 
--- Helper used by the policies. security definer so it can read `staff` without recursion.
+-- Is the caller staff of this district? Used inside the functions, which run as their owner.
 create function private.is_staff(p_district text)
 returns boolean
 language sql
@@ -218,13 +219,11 @@ as $$
   );
 $$;
 
-revoke execute on function private.is_staff(text) from public;
-grant execute on function private.is_staff(text) to anon, authenticated;
+revoke execute on function private.is_staff(text) from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- Row level security. Residents read everything public through get_snapshot, which
--- hides `created_by` and hidden issues. Direct selects are for staff and for a
--- resident's own records.
+-- Row level security, on for every table. Policies exist only for what is granted above;
+-- every other read and write goes through the functions in the next migration.
 
 alter table public.districts enable row level security;
 alter table public.staff enable row level security;
@@ -245,37 +244,33 @@ create policy "Districts are public" on public.districts
 create policy "Staff read their own rows" on public.staff
   for select to authenticated using (user_id = (select auth.uid()));
 
-create policy "Staff read their district's issues" on public.issues
-  for select to authenticated using (private.is_staff(district_id));
-
-create policy "Staff read updates in their district" on public.issue_updates
-  for select to authenticated
-  using (exists (select 1 from public.issues i where i.id = issue_id));
-
-create policy "Staff read history in their district" on public.issue_history
-  for select to authenticated
-  using (exists (select 1 from public.issues i where i.id = issue_id));
-
-create policy "Staff read city requests in their district" on public.city_requests
-  for select to authenticated
-  using (exists (select 1 from public.issues i where i.id = issue_id));
-
-create policy "Staff read their district's scan points" on public.scan_points
-  for select to authenticated using (private.is_staff(district_id));
-
-create policy "Devices read their own votes" on public.votes
-  for select to authenticated using (user_id = (select auth.uid()));
-
-create policy "Devices read their own follows" on public.follows
-  for select to authenticated using (user_id = (select auth.uid()));
-
-create policy "Devices read their own confirmations" on public.fix_confirmations
-  for select to authenticated using (user_id = (select auth.uid()));
-
--- follow_contacts: RLS on, no policies, no grants.
-
 create policy "Signed-in devices record events" on public.events
   for insert to authenticated with check (user_id = (select auth.uid()));
 
-create policy "Staff read their district's events" on public.events
-  for select to authenticated using (private.is_staff(district_id));
+-- At most 120 events per device per 10 minutes. Extra ones are dropped without an error, so
+-- analytics never get in the way, and one device can't flood the experiment numbers.
+create function private.limit_events()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_setting('pp.seeding', true) = 'on' then
+    return new;
+  end if;
+  perform pg_advisory_xact_lock(hashtext('pp-events:' || coalesce(new.user_id::text, '')));
+  if (
+    select count(*) from public.events
+    where user_id = new.user_id and at > now() - interval '10 minutes'
+  ) >= 120 then
+    return null;
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function private.limit_events() from public, anon, authenticated;
+
+create trigger limit_events before insert on public.events
+  for each row execute function private.limit_events();

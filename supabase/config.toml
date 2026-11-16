@@ -68,8 +68,9 @@ schema_paths = []
 enabled = true
 # Specifies an ordered list of seed files to load during db reset.
 # Supports glob patterns relative to supabase directory: "./seeds/*.sql"
-# seed-local-staff.sql adds a demo staff account with a public password: local only.
-sql_paths = ["./seed.sql", "./seed-local-staff.sql"]
+# Only the sample data. The local staff account (public password) is loaded separately by
+# `npm run db:reset`, so `db push --include-seed` or a preview branch can never create it.
+sql_paths = ["./seed.sql"]
 
 [db.network_restrictions]
 # Enable management of network restrictions.
@@ -226,7 +227,10 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# Must be on: with it off, Auth applies an email change at once, so a device could put anyone's
+# address on its account without the code (resident accounts, docs/BACKEND.md). Staff accounts
+# are created confirmed (dashboard "Auto confirm user", or admin createUser with email_confirm).
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
@@ -246,10 +250,17 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# Resident account codes (docs/BACKEND.md, "Resident accounts"). A new account is the device's
+# anonymous user getting an email (email_change); a returning one signs in with a code
+# (magic_link). Both emails carry only the 6-digit code, no link. Hosted projects: paste the
+# same template under Authentication → Emails for "Change email address" and "Magic link".
+[auth.email.template.email_change]
+subject = "Your Problem Pins code"
+content_path = "./supabase/templates/resident-code.html"
+
+[auth.email.template.magic_link]
+subject = "Your Problem Pins code"
+content_path = "./supabase/templates/resident-code.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]

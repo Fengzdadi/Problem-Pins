@@ -3,14 +3,16 @@
 //
 //   npm run db:seed-sql        (then `supabase db reset` to load it locally)
 //
-// Counts in the sample (votes, votesThisWeek, following, confirmedFixed, duplicatesMerged)
-// become records: anonymous votes, follows and confirmations spread over the issue's life,
-// and merged duplicate issues. Dates are written relative to the day the seed runs: the
-// demo's "today" (DEMO_TODAY) becomes today in New York.
+// Counts in the sample (votes, votesThisWeek, following, confirmedFixed, notFixed,
+// duplicatesMerged) become records: anonymous votes, follows and confirmations spread over
+// the issue's life, and merged duplicate issues. The demo's analytics events come along too.
+// Dates are written relative to the day the seed runs: the demo's "today" (DEMO_TODAY)
+// becomes today in New York.
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DEMO_DISTRICT, DEMO_SCAN_POINTS } from '../src/data/demoDistrict.ts';
+import { DEMO_EVENTS } from '../src/data/demoEvents.ts';
 import { SAMPLE_ISSUES } from '../src/data/sampleData.ts';
 import type { Issue } from '../src/data/types.ts';
 
@@ -23,7 +25,7 @@ const MERGED_DUPLICATES: { id: string; into: string; title: string; createdAt: s
   { id: 'PP-2405', into: 'PP-2402', title: 'Dark stretch of W 16th St at night', createdAt: '2026-09-29' },
   { id: 'PP-2406', into: 'PP-2402', title: 'Lamp post not working near 10th Ave', createdAt: '2026-09-29' },
   { id: 'PP-2408', into: 'PP-2402', title: 'No lights on W 16th between 9th and 10th', createdAt: '2026-09-30' },
-  { id: 'PP-2411', into: 'PP-2402', title: 'Broken street lamp, W 16th St', createdAt: '2026-10-01', via: 'QR · BID noticeboard Q-12' },
+  { id: 'PP-2411', into: 'PP-2402', title: 'Broken street lamp, W 16th St', createdAt: '2026-10-01', via: 'QR · Community noticeboard Q-12' },
 ];
 
 const DAY = 86400000;
@@ -39,6 +41,12 @@ function lit(value: unknown): string {
 }
 
 const ago = (date: string, minutes = 0) => `private.seed_ago(${daysAgo(date)}${minutes ? `, ${minutes}` : ''})`;
+
+/** An instant from demoEvents.ts (New York time, EDT for the whole demo window) as a seed time. */
+function agoInstant(iso: string) {
+  const local = new Date(Date.parse(iso) - 4 * 3600000);
+  return ago(local.toISOString().slice(0, 10), local.getUTCHours() * 60 + local.getUTCMinutes() - 12 * 60);
+}
 
 const d = DEMO_DISTRICT;
 const out: string[] = [];
@@ -140,7 +148,7 @@ const duplicates = MERGED_DUPLICATES.map((m) => {
     agency: undefined,
     locationDetail: undefined,
     fixedOn: undefined,
-    via: m.via ?? 'Map · problempins.org',
+    via: m.via ?? 'the map',
     mergedInto: m.into,
     updates: [],
     history: [
@@ -201,8 +209,21 @@ for (const i of SAMPLE_ISSUES) {
   if (i.confirmedFixed > 0 && i.fixedOn) {
     sql(`insert into public.fix_confirmations (issue_id, user_id, answer, created_at) select ${lit(i.id)}, gen_random_uuid(), 'yes', t from private.seed_spread(${i.confirmedFixed}, ${daysAgo(i.fixedOn)}, 0) t;`);
   }
+  // From the day after the fix, so they count as answers to it (see `not_fixed` in get_snapshot).
+  if (i.notFixed > 0 && i.fixedOn) {
+    sql(`insert into public.fix_confirmations (issue_id, user_id, answer, created_at) select ${lit(i.id)}, gen_random_uuid(), 'no', t from private.seed_spread(${i.notFixed}, ${Math.max(daysAgo(i.fixedOn) - 1, 0)}, 0) t;`);
+  }
 }
 sql('');
+
+const events = DEMO_EVENTS.map(
+  (e) =>
+    `  (${[lit(d.id), lit(e.name), lit(e.issueId ?? null), lit(e.scanCode ?? null), lit(e.props ?? null), agoInstant(e.at)].join(', ')})`,
+);
+sql(`-- The demo's sample analytics (src/data/demoEvents.ts), so the dashboard and Reports have figures to show.
+insert into public.events (district_id, name, issue_id, scan_code, props, at) values
+${events.join(',\n')};
+`);
 
 sql(`insert into public.scan_points (district_id, code, name, detail, lat, lng, issue_id) values
 ${DEMO_SCAN_POINTS.map((p) => `  (${[lit(d.id), lit(p.code), lit(p.name), lit(p.detail), p.lat, p.lng, lit(p.issueId ?? null)].join(', ')})`).join(',\n')};

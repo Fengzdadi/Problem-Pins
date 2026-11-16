@@ -18,6 +18,7 @@ import {
   scansPerWeek,
   shiftMonth,
   staffResponse,
+  waitingByAgency,
 } from './metrics';
 import { isValidCode, nextFreeCode, normalizeCode, usedCodes } from './scanCodes';
 
@@ -42,6 +43,7 @@ function issue(over: Partial<Issue>): Issue {
     following: 0,
     duplicatesMerged: 0,
     confirmedFixed: 0,
+    notFixed: 0,
     ...over,
   };
 }
@@ -88,6 +90,58 @@ describe('monthReport', () => {
   it('returns null medians and no top category when there is no data', () => {
     const r = monthReport(issues, '2026-10', '2026-10-14', ['litter']);
     expect(r).toMatchObject({ pinned: 0, fixed: 0, medianDaysToFix: null, topCategory: null, partial: true, through: '2026-10-14' });
+  });
+
+  it('counts 311 requests by the month they were filed, and how many still wait', () => {
+    const req = (sentOn: string) => ({ sr: '311-1', agency: 'NYC DOT', routedTo: '', sentOn });
+    const sent = [
+      issue({ id: 'A', createdAt: '2026-08-20', status: 'sent_to_city', cityRequest: req('2026-09-03') }), // pinned in August, filed in September
+      issue({ id: 'B', createdAt: '2026-09-05', status: 'fixed', fixedOn: '2026-09-25', cityRequest: req('2026-09-08') }),
+      issue({ id: 'C', createdAt: '2026-09-06', status: 'sent_to_city', cityRequest: req('2026-10-01') }),
+      issue({ id: 'D', createdAt: '2026-09-07', status: 'sent_to_city', cityRequest: req('2026-09-09'), hidden: true }),
+      issue({ id: 'E', createdAt: '2026-09-07', status: 'sent_to_city', cityRequest: req('2026-09-09'), mergedInto: 'A' }),
+    ];
+    expect(monthReport(sent, '2026-09', '2026-10-14', ['litter'])).toMatchObject({ sentToCity: 2, sentStillWaiting: 1 });
+    expect(monthReport(sent, '2026-08', '2026-10-14', ['litter'])).toMatchObject({ sentToCity: 0, sentStillWaiting: 0 });
+  });
+});
+
+describe('waitingByAgency', () => {
+  const req = (agency: string, sentOn: string) => ({ sr: '311-1', agency, routedTo: '', sentOn });
+  const sent = (id: string, agency: string, sentOn: string, over: Partial<Issue> = {}) =>
+    issue({ id, status: 'sent_to_city', agency, cityRequest: req(agency, sentOn), ...over });
+
+  it('groups by agency, most issues first then by name, longest wait first inside a group', () => {
+    const groups = waitingByAgency(
+      [
+        sent('A', 'NYC Parks', '2026-08-17'),
+        sent('B', 'NYC DOT', '2026-10-02'),
+        sent('C', 'NYC DOT', '2026-09-03'),
+        sent('D', 'DSNY', '2026-10-10'),
+      ],
+      '2026-10-14',
+    );
+    expect(groups.map((g) => [g.agency, g.rows.map((r) => `${r.issue.id} ${r.days}`)])).toEqual([
+      ['NYC DOT', ['C 41', 'B 12']],
+      ['DSNY', ['D 4']],
+      ['NYC Parks', ['A 58']],
+    ]);
+  });
+
+  it('includes issues that name an agency but are not filed yet, counted from the pin', () => {
+    const groups = waitingByAgency(
+      [
+        issue({ id: 'A', agency: 'NYC DEP', createdAt: '2026-10-08' }),
+        issue({ id: 'B', agency: 'NYC DEP', createdAt: '2026-09-01', status: 'fixed', fixedOn: '2026-09-09' }),
+        issue({ id: 'C', createdAt: '2026-10-01' }), // no agency: the district's own
+        sent('D', 'NYC DOT', '2026-10-02', { hidden: true }),
+        sent('E', 'NYC DOT', '2026-10-02', { mergedInto: 'A' }),
+        sent('F', 'NYC DOT', '2026-09-03', { status: 'scheduled' }), // the City answered: no longer waiting
+      ],
+      '2026-10-14',
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ agency: 'NYC DEP', rows: [{ days: 6 }] });
   });
 });
 

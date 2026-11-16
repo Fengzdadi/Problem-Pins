@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Logo } from '../components/ui';
+import { useEffect, useState } from 'react';
+import { Logo, labelClass, linkClass } from '../components/ui';
 import { DEMO_STAFF_EMAIL, safeNext } from './auth';
 import { useStore } from '../store';
 
@@ -15,35 +15,26 @@ export default function Login({ next }: { next: string | null }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notStaff, setNotStaff] = useState(false);
-  const notStaffTimer = useRef<number | undefined>(undefined);
 
   // Leave as soon as there is a staff session (also covers arriving here already signed in).
   useEffect(() => {
     if (staff) window.location.replace(`#${target}`);
   }, [staff, target]);
 
-  useEffect(() => () => window.clearTimeout(notStaffTimer.current), []);
-
   const submit = async () => {
     setError(null);
-    setNotStaff(false);
     const e = email.trim();
     if (!e) return setError('Enter your work email.');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return setError('That doesn’t look like an email address.');
     if (!demo && !password) return setError('Enter your password.');
     setBusy(true);
-    const ok = await signIn(e, password);
+    // The backend explains failures itself (wrong password, too many tries, not on this district's staff list).
+    const failed = await signIn(e, password);
     setBusy(false);
-    if (!ok) {
-      setError('Couldn’t sign you in. Check your email and password and try again.');
-      return;
-    }
-    // Signed in, but the account may not be on this district's staff list.
-    notStaffTimer.current = window.setTimeout(() => setNotStaff(true), 2500);
+    if (failed) setError(failed);
   };
 
-  const field = 'mt-1 h-11 w-full rounded-lg border border-slate-200 px-3 text-[15px] outline-none focus:border-brand';
+  const field = 'mt-1 h-11 w-full rounded-lg border border-slate-200 px-3 text-[15px]';
 
   return (
     <div className="flex h-full items-start justify-center overflow-y-auto bg-slate-100 px-4 py-10 sm:items-center sm:py-6">
@@ -58,7 +49,7 @@ export default function Login({ next }: { next: string | null }) {
         >
           <Logo />
           <div>
-            <p className="font-mono text-[10px] tracking-wider text-slate-500">{district.name.toUpperCase()} · STAFF</p>
+            <p className={labelClass}>{district.name} · Staff</p>
             <h1 className="mt-1 text-xl font-bold">Sign in to the dashboard</h1>
           </div>
           <label className="block text-sm font-medium">
@@ -88,11 +79,6 @@ export default function Login({ next }: { next: string | null }) {
               {error}
             </p>
           )}
-          {notStaff && !staff && (
-            <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              You’re signed in, but this account isn’t on the staff list for {district.name}. Ask whoever runs your pilot to add you.
-            </p>
-          )}
           <button
             disabled={busy}
             className="h-11 w-full rounded-lg bg-brand font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
@@ -107,15 +93,17 @@ export default function Login({ next }: { next: string | null }) {
               {district.contactEmail && (
                 <>
                   {' '}
-                  Locked out? Email <a className="font-medium text-brand" href={`mailto:${district.contactEmail}`}>{district.contactEmail}</a>.
+                  Locked out? Email <a className={linkClass} href={`mailto:${district.contactEmail}`}>{district.contactEmail}</a>.
                 </>
               )}
             </p>
           )}
         </form>
-        <a href="#/" className="mt-4 block text-center text-sm text-slate-500 hover:text-ink">
-          Go to the public map
-        </a>
+        <p className="mt-4 text-center text-sm">
+          <a href="#/" className={linkClass}>
+            Go to the public map
+          </a>
+        </p>
       </div>
     </div>
   );

@@ -29,6 +29,7 @@ Screens never call a backend directly. Everything goes through `useStore()`. Sto
 | Data | `src/data/sampleData.ts`, saved in this browser | Supabase, shared by everyone |
 | Date | frozen at `DEMO_TODAY` (2026-10-14) | today in New York |
 | Staff | any email signs in as Maya Ruiz | real Supabase Auth accounts |
+| Resident accounts (optional) | on; the code is shown on screen, no email is sent | off unless `VITE_RESIDENT_ACCOUNTS=on`; codes come by email |
 | Demo bar, SAMPLE DATA badge | shown | hidden |
 
 `src/config.ts` picks the mode: live when `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are set,
@@ -48,13 +49,45 @@ presentations. Two demo tabs stay in sync through `storage` events.
 - **Hidden and merged issues**: `store.issues` excludes them; `store.hiddenIssues` (staff) has them;
   `store.getIssue(id)` finds any issue the viewer may see, so old links to a merged pin redirect.
 - **Privacy**: no personal data in analytics events. Follow contacts (email/phone) are stored but
-  never returned by `load()`. Photos are re-encoded through a canvas, which strips EXIF/GPS.
+  never returned by `load()`. A resident account's email is returned only to that resident
+  (`me.account`), never to neighbors or staff. Photos are re-encoded through a canvas, which strips
+  EXIF/GPS.
 - **District**: everything district-specific (name, area, boundary, teams, attention rules,
   categories) comes from `store.district`. Don't hard-code "West Side District" or "West Chelsea".
 - **Analytics**: the store tracks resident and staff actions centrally. Screens only track views
   (`map_view`, `scan_view`, `issue_view`, `pin_start`). Event names are a union in `types.ts`.
 - **Routing** is hash-based (`#/i/PP-2402`). Printed QR codes use a short path (`/q/Q-12`), which
   `src/router.ts` rewrites to `#/scan/Q-12?src=qr`; the host must serve `index.html` for `/q/*`.
+
+## Visual rules
+
+Every screen follows these. The shared classes are in `src/components/ui.tsx` (`labelClass`,
+`linkClass`, `fieldClass`) and `src/resident/shared.tsx` (`LABEL`, `LINK`, `BUTTON`).
+
+- **Type.** Inter for everything. Mono only for issue IDs, 311 SR numbers, poster codes and URLs.
+  No uppercase, letter-spaced labels: a section label is `text-xs font-medium text-slate-500` in
+  sentence case. Nothing below 12px.
+- **Color means status.** The five status colors in `src/data/meta.ts` are the only data colors.
+  A category is an icon and a label, never a color.
+- **Orange means "act here".** The one primary button of a view, text saying something waits on
+  the reader, and the Open status. Not for plain links, selected rows or decoration.
+- **Say it once, in words.** No grids of stat tiles inside small cards; a number appears once per
+  screen; at most three " · " facts in a row, each understandable alone.
+- **At most one tinted surface per screen**, only where the tint carries meaning (a status card,
+  the to-do banner).
+- **No placeholder art.** A missing photo shows nothing, or a flat grey thumbnail.
+- **Readable and reachable.** No `text-slate-400` for text that must be read; every control works
+  from the keyboard and shows the focus ring from `src/index.css`.
+- **Copy** is plain and true: sentence case, no exclamation marks, "+1" and "neighbors" (never
+  "votes"); residents report "problems", staff handle "issues"; the office is the district's name
+  or "the district office". No screen promises a text or email while `config.notifications` is off.
+- **Accounts stay optional.** Scan → +1 and pinning never ask for an email. The account is offered
+  only after something is saved and only as a plain link (never orange, never a banner or a modal):
+  in Your updates, in a new pin's "Your pin is live" card, and in About. Never on the scan landing
+  or an issue page, where the +1 happens. The words are "Keep … with your email" and "Sign in",
+  never "Sign up", "Create an account" or "Register", and every offer says what it is for (a new
+  phone, a cleared browser). Screens say where problems are kept: "on this phone" or "in your
+  account". The account's code email is the only email it sends, so it promises nothing else.
 
 ## Routes
 
@@ -65,8 +98,11 @@ presentations. Two demo tabs stay in sync through `storage` events.
 | `#/new?cat=&from=` | `resident/NewPin` | location |
 | `#/scan/:code?src=` | `resident/ScanLanding` | qr-analytics |
 | `#/updates` | `resident/Updates` | (shared, wave 2: notifications) |
+| `#/about` | `resident/About`: who runs it, what happens to a pin, what is public | (shared) |
+| `#/account?next=&from=` | `resident/Account`: optional resident account. Signed out: email, then a 6-digit code (the demo shows it; "Use it" signs in), then back to `next` (resident paths only, default `/updates`). Signed in: the email, what is saved, how another phone works, who sees the email, Sign out and Delete account (confirmed in place). `from` is the analytics source (`updates`, `new_pin`, `about`, `demo`). Hidden behind `residentAccounts` in `src/config.ts` | (shared) |
 | `#/org` `#/org/issues/:id` `#/org/map` `#/org/sent` | `org/*` | staff-app |
-| `#/org/reports` | `org/Reports` | qr-analytics |
+| `#/org/reports?month=` | `org/Reports` | qr-analytics |
+| `#/org/experiments` | `org/Experiments`: the Problem Pins team's experiment results. Not in the sidebar; Reports links to it in demo mode only | qr-analytics |
 | `#/org/qr` | `org/QrPosters` | qr-analytics |
 | `#/org/login?next=` | `org/Login` | staff-app |
 
@@ -115,5 +151,11 @@ npm run build       # typecheck + production build
 
 - Backend: Supabase. Residents get an anonymous Supabase identity per device (one vote per device),
   staff sign in with email and password.
+- Resident accounts are optional (2026-11-16). A resident may add an email, proved with a 6-digit
+  code, so their pins, +1s and follows survive a new phone or a cleared browser; one person on two
+  phones then counts once. No account is ever needed to pin or +1, and the district office sees no
+  account data, not even a count of "verified" neighbors: an email doesn't prove someone lives in
+  the district, and showing it would make staff discount the anonymous +1s the QR experiment
+  depends on. How it works: docs/BACKEND.md, "Resident accounts".
 - Analytics: our own `events` table, no third-party tracker.
 - Hosting, domain, map tile provider, budget: still open (see roadmap issue #1).

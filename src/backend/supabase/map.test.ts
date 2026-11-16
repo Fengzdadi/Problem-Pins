@@ -26,6 +26,7 @@ const row: IssueRow = {
   votes_this_week: 2,
   following: 1,
   confirmed_fixed: 0,
+  not_fixed: 0,
   duplicates_merged: 0,
   city_request: null,
   updates: [
@@ -70,6 +71,35 @@ describe('Supabase row mapping', () => {
       'West Side District',
     );
     expect(issue.cityRequest).toEqual({ sr: '311-1', agency: 'NYC DOT', routedTo: 'NYC DOT · Signals', sentOn: '2026-11-10', sentBy: 'Maya Ruiz' });
+  });
+});
+
+describe('Supabase staff-only fields', () => {
+  it('maps reports, staff names and staff-only history lines when staff receive them', () => {
+    const issue = mapIssue(
+      {
+        ...row,
+        reports: { count: 2, since: '2026-11-13T02:00:00Z', reasons: [{ reason: 'spam', count: 2 }] },
+        updates: [{ ...row.updates[0], staff_name: 'Maya Ruiz' }],
+        history: [
+          { text: 'Assigned to Crew', created_at: '2026-11-13T15:00:00Z', staff_name: 'Maya Ruiz', staff_only: false },
+          { text: 'Kept the pin, dismissed 2 reports', created_at: '2026-11-13T16:00:00Z', staff_name: 'Maya Ruiz', staff_only: true },
+        ],
+      },
+      'West Side District',
+    );
+    expect(issue.reports).toEqual({ count: 2, since: '2026-11-12', reasons: [{ reason: 'spam', count: 2 }] });
+    expect(issue.updates[0].staffName).toBe('Maya Ruiz');
+    expect(issue.history).toEqual([
+      { date: '2026-11-13', text: 'Assigned to Crew', staffName: 'Maya Ruiz' },
+      { date: '2026-11-13', text: 'Kept the pin, dismissed 2 reports', staffName: 'Maya Ruiz', staffOnly: true },
+    ]);
+  });
+
+  it('leaves them out for residents, who get nulls', () => {
+    const issue = mapIssue({ ...row, reports: null, history: [{ ...row.history[0], staff_name: null, staff_only: false }] }, 'West Side District');
+    expect(issue).not.toHaveProperty('reports');
+    expect(issue.history[0]).toEqual({ date: '2026-11-12', text: 'Pinned via Map · problempins.org' });
   });
 });
 

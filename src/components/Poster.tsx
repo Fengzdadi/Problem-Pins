@@ -17,12 +17,13 @@ export function Poster({ point, district, scale = 1 }: { point: ScanPoint; distr
       className="flex h-[11in] w-[8.5in] flex-col bg-white px-[0.7in] pb-[0.55in] pt-[0.6in] text-ink"
       style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-[0.12in]">
+      {/* A fixed height, so a district name that wraps to two lines moves nothing below it. */}
+      <div className="flex h-[0.44in] items-center justify-between gap-[0.4in]">
+        <div className="flex shrink-0 items-center gap-[0.12in]">
           <img src={markUrl} alt="" className="h-[0.42in]" />
           <span className="text-[17pt] font-semibold">Problem Pins</span>
         </div>
-        <span className="text-[13pt] text-slate-500">with {district.name}</span>
+        <p className="max-w-[3.2in] text-balance text-right text-[13pt] font-medium leading-[1.2]">with {district.name}</p>
       </div>
 
       <h1 className="mt-[0.55in] text-[50pt] font-bold leading-[1.02] tracking-tight">
@@ -48,14 +49,16 @@ export function Poster({ point, district, scale = 1 }: { point: ScanPoint; distr
         <img src={pipUrl} alt="" className="mb-[0.5in] w-[1.7in]" />
       </div>
 
-      <div className="mt-auto flex items-end justify-between border-t border-slate-300 pt-[0.16in] text-[10.5pt] text-slate-500">
-        <div>
-          <p className="font-mono tracking-wider text-ink">
-            {point.code} · {point.name.toUpperCase()}
+      <div className="mt-auto border-t border-slate-300 pt-[0.16in] text-[10.5pt] text-slate-600">
+        <div className="flex items-baseline justify-between gap-[0.3in]">
+          <p className="min-w-0 font-medium text-ink">
+            <span className="font-mono">{point.code}</span> · {point.name}
           </p>
-          <p className="mt-[0.04in]">Pins go to {district.name}. Problems the City owns are forwarded to 311.</p>
+          <span className="shrink-0 text-slate-500">{district.area}</span>
         </div>
-        <span className="font-mono tracking-wider">{district.area.toUpperCase()}</span>
+        <p className="mt-[0.04in] text-balance">
+          Pins go to the {district.name} office, which files them with NYC 311 and follows up. For emergencies call 911.
+        </p>
       </div>
     </div>
   );

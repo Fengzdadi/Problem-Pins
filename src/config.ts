@@ -30,6 +30,13 @@ export const config = {
   /** Base URL printed on QR posters and used for short links (`<publicUrl>/q/Q-12`). */
   publicUrl: (env.VITE_PUBLIC_URL || (typeof window === 'undefined' ? '' : window.location.origin)).replace(/\/$/, ''),
   /**
+   * Whether following a problem really sends a text or email. Nothing sends them yet
+   * (docs/BACKEND.md, wave 2), so this is off unless a deployment says otherwise. While it is
+   * off, resident screens must not ask for a phone or email or promise a message: a follow is
+   * kept on the device and shows under "Your updates".
+   */
+  notifications: env.VITE_NOTIFICATIONS === 'on',
+  /**
    * Raster tiles, shown in grayscale by CSS. The default (Stadia Maps "Alidade Smooth") needs no key on
    * localhost only; deployments must set their own provider. See docs/MAP_TILES.md.
    */
@@ -42,3 +49,11 @@ export const config = {
 };
 
 export const isDemo = config.mode === 'demo';
+
+/**
+ * Optional resident accounts: add an email, proved with a 6-digit code, to keep your pins, +1s and
+ * follows beyond this browser. Always on in the demo (it shows the code instead of sending it).
+ * Live deployments turn them on with VITE_RESIDENT_ACCOUNTS=on once the Supabase project sends
+ * email through a real provider and has the code templates (docs/BACKEND.md, "Resident accounts").
+ */
+export const residentAccounts = isDemo || env.VITE_RESIDENT_ACCOUNTS === 'on';

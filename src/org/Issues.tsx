@@ -1,144 +1,221 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check, ExternalLink, Eye, EyeOff, GitMerge, Search, Send } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
-import { CategoryTag, PhotoThumb, SampleBadge, StatusTag } from '../components/ui';
+import { CategoryTag, PhotoThumb, SampleBadge, StatusTag, fieldBoxClass, labelClass, linkClass } from '../components/ui';
 import { CATEGORIES, STATUSES, STATUS_ORDER } from '../data/meta';
-import type { District, Issue, Status } from '../data/types';
-import { addDays, daysBetween, shortDate, today } from '../lib/format';
+import type { Issue, Status } from '../data/types';
+import { daysBetween, plural, shortDate, today } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
+import { CHECK_311, copySr } from './actions';
+import { todoFor, todoHeadline, type TodoItem } from './dashboard';
 import { ForwardToCityForm } from './ForwardToCity';
+import { TABS, cityWait, issueList, tabCount, type TabId } from './issueList';
 import { HideDialog, MergeDialog } from './Moderation';
 import { useMediaQuery } from './useMediaQuery';
 
-interface Tab {
-  id: string;
-  label: string;
-  /** `hidden` lists hidden and merged issues instead of the public ones. */
-  source: 'public' | 'hidden';
-  filter: (i: Issue) => boolean;
+/** Asks the residents box to scroll into view and take focus, with a status picked if given. `n` makes every ask a new one. */
+interface Compose {
+  status?: Status;
+  n: number;
 }
 
-function tabsFor(district: District): Tab[] {
-  const since = addDays(today(), -29);
-  return [
-    { id: 'inbox', label: 'Inbox', source: 'public', filter: (i) => i.status !== 'fixed' },
-    { id: 'unassigned', label: 'Unassigned', source: 'public', filter: (i) => i.status !== 'fixed' && !i.owner },
-    ...district.teams.map(
-      (team, idx): Tab => ({ id: `team${idx + 1}`, label: team, source: 'public', filter: (i) => i.status !== 'fixed' && i.owner === team }),
-    ),
-    { id: 'city', label: 'Sent to City', source: 'public', filter: (i) => i.status === 'sent_to_city' },
-    { id: 'waiting', label: 'Fixed, not confirmed', source: 'public', filter: (i) => i.status === 'fixed' && i.confirmedFixed === 0 },
-    { id: 'fixed', label: 'Fixed · 30 days', source: 'public', filter: (i) => i.status === 'fixed' && Boolean(i.fixedOn && i.fixedOn >= since) },
-    { id: 'hidden', label: 'Hidden & merged', source: 'hidden', filter: () => true },
-  ];
-}
+const button = 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-slate-300';
 
-/** Honest vote summary: the contract only knows the total and the last 7 days. */
-function VotesSummary({ issue }: { issue: Issue }) {
-  const before = Math.max(0, issue.votes - issue.votesThisWeek);
+/** Why the issue is on the to-do list, in the Overview's words, and the action that takes it off. */
+function TodoLine({ todo, onCompose, onHide }: { todo: TodoItem; onCompose: (status?: Status) => void; onHide: () => void }) {
+  const { dismissReports, toast } = useStore();
+  const label = todo.kind === 'quiet' ? 'Post update' : todo.kind === 'residents' ? 'Reply' : 'Respond';
+  const [title, wait] = todoHeadline(todo).split(' · ');
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="mb-2 flex justify-between font-mono text-[10px] tracking-wider text-slate-500">
-        <span>VOTES · SINCE {shortDate(issue.createdAt).toUpperCase()}</span>
-        <span className="text-ink">{issue.votes} total</span>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-brand-soft px-4 py-3">
+      <div className="min-w-0 flex-1 basis-56 text-sm">
+        <p className="font-semibold text-brand-dark">
+          {title} · <span className="whitespace-nowrap">{wait}</span>
+        </p>
+        {/* For an issue nobody has answered the reason is when it was pinned and by how many, which the page already says. */}
+        {todo.kind !== 'new' && <p className="mt-0.5 text-slate-700">{todo.reason}</p>}
       </div>
-      <div className="flex h-3 overflow-hidden rounded bg-slate-100">
-        <div style={{ flex: before, background: '#d6c8ef' }} />
-        <div style={{ flex: issue.votesThisWeek, background: '#8e63c7' }} />
-      </div>
-      <p className="mt-2 flex flex-wrap gap-x-4 text-xs text-slate-600">
-        <span>
-          <span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: '#8e63c7' }} />
-          {issue.votesThisWeek} in the last 7 days
-        </span>
-        <span>
-          <span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: '#d6c8ef' }} />
-          {before} before that
-        </span>
-      </p>
+      {/* Reports are answered by hiding the pin or keeping it. Residents never see either. */}
+      {todo.kind === 'reported' && (
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <button onClick={onHide} className={button}>
+            <EyeOff className="h-4 w-4" /> Hide…
+          </button>
+          <button
+            onClick={async () => {
+              if (await dismissReports(todo.issue.id)) toast(`Reports on ${todo.issue.id} dismissed`);
+            }}
+            className={button}
+          >
+            Keep pin, dismiss reports
+          </button>
+        </div>
+      )}
+      {/* A City follow-up is logged on the 311 card below. */}
+      {todo.kind !== 'city' && todo.kind !== 'reported' && (
+        <div className="flex shrink-0 gap-2">
+          {todo.issue.status === 'fixed' && (
+            <button onClick={() => onCompose('in_review')} className={button}>
+              Reopen…
+            </button>
+          )}
+          {/* Replying keeps the status unless the staffer picks another. */}
+          <button onClick={() => onCompose(todo.issue.status)} className={button}>
+            {label}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function UpdateResidents({ issue }: { issue: Issue }) {
+/**
+ * Everything on the public page as one thread, oldest first, with the box for the next update
+ * at the end, so a reply is written under what it answers. Changing the status goes through
+ * here too, so residents always get a line with it.
+ */
+function ResidentsThread({ issue, compose, canPost }: { issue: Issue; compose: Compose | null; canPost: boolean }) {
   const { postUpdate, toast } = useStore();
   const [text, setText] = useState('');
   const [status, setStatus] = useState<Status>(issue.status);
+  const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     setText('');
     setStatus(issue.status);
   }, [issue.id, issue.status]);
+  useEffect(() => {
+    if (!compose) return;
+    if (compose.status) setStatus(compose.status);
+    box.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    box.current?.focus({ preventScroll: true });
+  }, [compose]);
+
+  const posts = [...issue.updates].sort((a, b) => a.date.localeCompare(b.date));
+  // "Sent to City" needs an SR number, so it comes from the 311 form, not from here.
+  const statuses = STATUS_ORDER.filter((s) => s !== 'sent_to_city' || issue.cityRequest || issue.status === 'sent_to_city');
+  const fixing = status === 'fixed' && issue.status !== 'fixed';
+  const label =
+    status === issue.status
+      ? 'Post update'
+      : fixing
+        ? 'Post and mark fixed'
+        : issue.status === 'fixed'
+          ? 'Post and reopen'
+          : `Post and set to ${STATUSES[status].label}`;
 
   return (
-    <div className="rounded-xl border-2 border-brand/60 bg-white p-4">
-      <div className="mb-2 flex flex-wrap justify-between gap-x-3">
-        <h3 className="font-semibold">Update residents</h3>
-        <span className="font-mono text-xs text-slate-500">{issue.following} following</span>
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={3}
-        placeholder="What changed? Residents who +1’d or follow this will see it on the issue page and in their updates."
-        className="w-full rounded-lg bg-slate-50 p-3 text-sm outline-none focus:ring-2 focus:ring-brand/30"
-      />
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500">
-          Status
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as Status)}
-            className="bg-transparent text-sm font-medium text-ink outline-none"
-          >
-            {STATUS_ORDER.map((s) => (
-              <option key={s} value={s}>
-                {STATUSES[s].label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          disabled={!text.trim()}
-          onClick={async () => {
-            if (await postUpdate(issue.id, text.trim(), status)) toast(`Update posted on ${issue.id}`);
-          }}
-          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
-        >
-          Post update
-        </button>
-      </div>
-    </div>
+    <section className="rounded-xl border border-slate-200 bg-white">
+      <h3 className="px-4 pt-3 font-semibold">Residents</h3>
+      {posts.length > 0 ? (
+        <ol className="mt-2 space-y-2 px-4">
+          {posts.map((u) => {
+            const resident = u.role === 'resident';
+            return (
+              <li key={u.id} className={`text-sm ${resident ? 'rounded-lg bg-slate-50 px-3 py-2' : 'border-l-2 border-slate-300 py-0.5 pl-3'}`}>
+                <p className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-semibold">{u.author}</span>
+                  {resident && <span className="text-xs text-slate-500">resident</span>}
+                  {/* Who at the office posted it. Residents see only the district. */}
+                  {u.staffName && <span className="text-xs text-slate-500">{u.staffName}</span>}
+                  <span className="text-xs text-slate-500">{shortDate(u.date)}</span>
+                </p>
+                <p className="text-slate-700">{u.text}</p>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="mt-1 px-4 text-sm text-slate-500">Nothing posted yet.</p>
+      )}
+      {canPost ? (
+        <div className="mt-3 border-t border-slate-100 p-4">
+          <textarea
+            ref={box}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={3}
+            aria-label="Update for residents"
+            placeholder={
+              fixing
+                ? 'What was done, and by whom? Neighbors will be asked to confirm it’s fixed.'
+                : 'What changed? Residents who +1’d or follow this see it on the issue page and in their updates.'
+            }
+            className="w-full rounded-lg border border-slate-200 p-3 text-sm"
+          />
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <label className={`${fieldBoxClass} py-1.5 text-xs text-slate-500`}>
+              Status
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value as Status)}
+                className="bg-transparent text-sm font-medium text-ink outline-none"
+              >
+                {statuses.map((s) => (
+                  <option key={s} value={s}>
+                    {STATUSES[s].label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              disabled={!text.trim()}
+              onClick={async () => {
+                if (await postUpdate(issue.id, text.trim(), status)) {
+                  setText('');
+                  toast(fixing ? `${issue.id} marked fixed · neighbors will be asked to confirm` : `Update posted on ${issue.id}`);
+                }
+              }}
+              className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
+            >
+              {label}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="pb-3" />
+      )}
+    </section>
   );
 }
 
-function CityCard({ issue }: { issue: Issue }) {
+function CityCard({ issue, todo }: { issue: Issue; todo: TodoItem | null }) {
   const { nudgeCity, assign, toast, district } = useStore();
   const [forwarding, setForwarding] = useState(false);
   useEffect(() => setForwarding(false), [issue.id]);
   const req = issue.cityRequest;
 
   if (req) {
-    const since = req.lastFollowUp ?? req.sentOn;
+    // Once it's fixed or reopened, the request is a record, not something to chase.
+    const waiting = issue.status === 'sent_to_city';
+    const day = today();
+    const wait = cityWait(req, day);
+    // Orange by the to-do list's rule: no contact with the City for `cityNoReplyDays` or more.
+    const late = daysBetween(req.lastFollowUp ?? req.sentOn, day) >= district.rules.cityNoReplyDays;
     const rows: [string, string, string?][] = [
-      ['Filed', `${shortDate(req.sentOn)} by ${req.sentBy}`],
+      ['Filed', req.sentBy ? `${shortDate(req.sentOn)} by ${req.sentBy}` : shortDate(req.sentOn)],
       ['Agency', req.agency],
       ...(req.routedTo && req.routedTo !== req.agency ? [['Routed to', req.routedTo] as [string, string]] : []),
       ['Last follow-up', req.lastFollowUp ? shortDate(req.lastFollowUp) : 'None yet'],
-      ['Waiting', `${daysBetween(since)} days since ${req.lastFollowUp ? 'the last follow-up' : 'filing'}`, 'text-brand'],
+      // When the to-do line above already gives this wait, it isn't said twice.
+      ...(waiting && todo?.kind !== 'city'
+        ? [['Waiting', wait[0].toUpperCase() + wait.slice(1), late ? 'font-medium text-brand-dark' : ''] as [string, string, string]]
+        : []),
     ];
     return (
-      <div className="overflow-hidden rounded-xl border-2 border-violet-300 bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-2 bg-violet-50 px-4 py-3">
+      <div className="rounded-xl border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-3">
           <div>
-            <p className="font-mono text-[10px] tracking-wider text-violet-700">NYC 311 SERVICE REQUEST</p>
-            <p className="font-mono text-xl font-bold sm:text-2xl">{req.sr}</p>
+            <p className={labelClass}>NYC 311 service request</p>
+            <p className="mt-0.5 font-mono text-lg font-semibold">{req.sr}</p>
           </div>
           <a
-            href="https://portal.311.nyc.gov/check-status/"
+            href={CHECK_311}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-1 text-sm font-medium text-violet-700"
+            onClick={() => copySr(req.sr, toast)}
+            title="Opens NYC 311’s status page and copies the SR number"
+            className={`flex items-center gap-1 text-sm ${linkClass}`}
           >
             Check status on NYC 311 <ExternalLink className="h-3.5 w-3.5" />
           </a>
@@ -149,34 +226,33 @@ function CityCard({ issue }: { issue: Issue }) {
             <span className={cls}>{v}</span>
           </div>
         ))}
-        <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
-          <button
-            onClick={async () => {
-              if (await nudgeCity(issue.id)) toast(`Follow-up on ${req.sr} recorded`);
-            }}
-            className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
-          >
-            <Send className="h-4 w-4" /> Record a follow-up
-          </button>
-          <p className="basis-full text-xs text-slate-500">
-            Follow up with 311 or {req.agency} first (mention the {issue.votes} neighbors), then record it here so the wait resets.
-          </p>
-        </div>
+        {waiting && (
+          <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3">
+            <button
+              onClick={async () => {
+                if (await nudgeCity(issue.id)) toast(`Follow-up on ${req.sr} recorded`);
+              }}
+              className={button}
+            >
+              <Send className="h-4 w-4" /> Log follow-up
+            </button>
+            <p className="basis-full text-xs text-slate-500">
+              Follow up with 311 or {req.agency} first (mention the {plural(issue.votes, 'neighbor')}), then log it here so the wait resets.
+            </p>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="font-mono text-[10px] tracking-wider text-slate-500">WHO FIXES THIS</p>
+      <p className={labelClass}>Who fixes this</p>
       {issue.agency && !forwarding && (
         <>
-          <p className="mt-1 font-semibold">{issue.agency} handles this, not the District.</p>
+          <p className="mt-1 font-semibold">This is {issue.agency}’s to fix.</p>
           <p className="mt-1 text-sm text-slate-600">File it with 311, then record the SR number here to track the City’s reply.</p>
-          <button
-            onClick={() => setForwarding(true)}
-            className="mt-3 flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
-          >
+          <button onClick={() => setForwarding(true)} className={`${button} mt-3`}>
             <Send className="h-4 w-4" /> Forward to City
           </button>
         </>
@@ -199,9 +275,12 @@ function CityCard({ issue }: { issue: Issue }) {
               ))}
             </select>
           </div>
-          <button onClick={() => setForwarding(true)} className="mt-3 text-sm font-medium text-slate-600 hover:text-ink">
-            The City handles this? Forward to 311 →
-          </button>
+          <p className="mt-3 text-sm text-slate-600">
+            The City handles this?{' '}
+            <button onClick={() => setForwarding(true)} className={linkClass}>
+              Forward to 311
+            </button>
+          </p>
         </>
       )}
       {forwarding && (
@@ -213,31 +292,33 @@ function CityCard({ issue }: { issue: Issue }) {
   );
 }
 
+const banner = 'flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-slate-100 px-4 py-3 text-sm';
+
 function ModerationBanner({ issue }: { issue: Issue }) {
   const { unhideIssue, toast } = useStore();
   if (issue.mergedInto) {
     return (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-slate-800 px-4 py-3 text-sm text-white">
-        <GitMerge className="h-4 w-4 shrink-0" />
+      <div className={banner}>
+        <GitMerge className="h-4 w-4 shrink-0 text-slate-500" />
         <span className="flex-1">
           Merged into <span className="font-mono">{issue.mergedInto}</span>. Residents opening this link are sent there.
         </span>
-        <button onClick={() => navigate(`/org/issues/${issue.mergedInto}`)} className="font-semibold text-orange-300 hover:text-orange-200">
-          Open {issue.mergedInto} →
-        </button>
+        <a href={`#/org/issues/${issue.mergedInto}`} className={linkClass}>
+          Open {issue.mergedInto}
+        </a>
       </div>
     );
   }
   if (issue.hidden) {
     return (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-slate-800 px-4 py-3 text-sm text-white">
-        <EyeOff className="h-4 w-4 shrink-0" />
+      <div className={banner}>
+        <EyeOff className="h-4 w-4 shrink-0 text-slate-500" />
         <span className="flex-1">Hidden from the public{issue.hiddenReason ? `: ${issue.hiddenReason}` : ''}.</span>
         <button
           onClick={async () => {
             if (await unhideIssue(issue.id)) toast(`${issue.id} is back on the public map`);
           }}
-          className="flex items-center gap-1.5 font-semibold text-orange-300 hover:text-orange-200"
+          className={button}
         >
           <Eye className="h-4 w-4" /> Unhide
         </button>
@@ -247,34 +328,74 @@ function ModerationBanner({ issue }: { issue: Issue }) {
   return null;
 }
 
+function Facts({ issue }: { issue: Issue }) {
+  const rows: [string, ReactNode, boolean?][] = [
+    ['Owner', issue.owner ?? 'Unassigned'],
+    ['Neighbors', `${issue.votes} (+${issue.votesThisWeek} this week)`],
+    ['Following', issue.following],
+    ['Duplicates merged', issue.duplicatesMerged],
+  ];
+  if (issue.status === 'fixed' || issue.confirmedFixed > 0 || issue.notFixed > 0) {
+    rows.push(['Confirmed fixed', issue.confirmedFixed], ['Say it isn’t fixed', issue.notFixed, issue.notFixed > 0]);
+  }
+  rows.push(['Came in through', issue.via]);
+  return (
+    <dl className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white text-sm">
+      {rows.map(([k, v, alert]) => (
+        <div key={k} className="flex justify-between gap-3 px-3 py-2">
+          <dt className="text-slate-500">{k}</dt>
+          <dd className={`text-right font-medium ${alert ? 'text-brand-dark' : ''}`}>{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export default function Issues({ selectedId, tab }: { selectedId?: string; tab: string }) {
   const store = useStore();
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<'merge' | 'hide' | null>(null);
-  useEffect(() => setDialog(null), [selectedId]);
+  const [compose, setCompose] = useState<Compose | null>(null);
+  useEffect(() => {
+    setDialog(null);
+    setCompose(null);
+  }, [selectedId]);
 
-  const tabs = useMemo(() => tabsFor(store.district), [store.district]);
-  const activeTab = tabs.find((t) => t.id === tab) ?? tabs[0];
-  const sourceFor = (t: Tab) => (t.source === 'hidden' ? store.hiddenIssues : store.issues);
+  const day = today();
+  const { rules } = store.district;
+  const activeTab = TABS.find((t) => t.id === tab) ?? TABS[0];
+  const searching = query.trim() !== '';
+  const { rows, summary } = useMemo(
+    () => issueList(activeTab.id, { issues: store.issues, hidden: store.hiddenIssues }, rules, day, query),
+    [activeTab.id, store.issues, store.hiddenIssues, rules, day, query],
+  );
+  const counts = useMemo(() => {
+    const pools = { issues: store.issues, hidden: store.hiddenIssues };
+    return Object.fromEntries(TABS.map((t) => [t.id, tabCount(t.id, pools, rules, day)])) as Record<TabId, number>;
+  }, [store.issues, store.hiddenIssues, rules, day]);
 
-  const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return (activeTab.source === 'hidden' ? store.hiddenIssues : store.issues)
-      .filter(activeTab.filter)
-      .filter((i) => !q || `${i.id} ${i.title} ${i.locationLabel}`.toLowerCase().includes(q))
-      .sort((a, b) => b.votes - a.votes);
-  }, [store.issues, store.hiddenIssues, activeTab, query]);
+  // With nothing picked, wide screens show the first row. It stays shown while the list re-sorts
+  // under it (answering an issue moves it down), until another is picked or the list changes.
+  const listKey = `${activeTab.id}|${query.trim()}`;
+  const [kept, setKept] = useState<{ key: string; id: string } | null>(null);
+  const fallback = (kept?.key === listKey ? rows.find((r) => r.issue.id === kept.id)?.issue : undefined) ?? rows[0]?.issue;
+  useEffect(() => {
+    if (!selectedId && fallback && (kept?.key !== listKey || kept.id !== fallback.id)) setKept({ key: listKey, id: fallback.id });
+  }, [selectedId, fallback, kept, listKey]);
 
   const missing = Boolean(selectedId && !store.getIssue(selectedId));
-  const issue = selectedId ? store.getIssue(selectedId) : list[0];
+  const issue = selectedId ? store.getIssue(selectedId) : fallback;
+  const todo = issue ? todoFor(issue, rules, day) : null;
   const base = activeTab.id === 'city' ? '/org/sent' : '/org/issues';
   const tabQuery = activeTab.id !== 'inbox' && activeTab.id !== 'city' ? `?tab=${activeTab.id}` : '';
   const linkFor = (id: string) => `${base}/${id}${tabQuery}`;
+  const startCompose = (status?: Status) => setCompose((c) => ({ status, n: (c?.n ?? 0) + 1 }));
   // Phones show the list or one issue, never both. `selectedId` decides which.
   const showDetailOnPhone = Boolean(selectedId);
   // Don't mount the detail (and its map) while it's hidden: Leaflet can't size a map in a hidden box.
   const wide = useMediaQuery('(min-width: 768px)');
   const showDetail = wide || showDetailOnPhone;
+  const age = issue ? daysBetween(issue.createdAt, day) : 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -283,25 +404,31 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
           <h1 className="sr-only md:not-sr-only md:text-2xl md:font-bold">Issues</h1>
           <div className="flex w-full items-center gap-3 sm:w-auto">
             <SampleBadge />
-            <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-200 px-3 focus-within:border-brand sm:w-64 sm:flex-none">
+            <label className={`${fieldBoxClass} min-w-0 flex-1 sm:w-64 sm:flex-none`}>
               <Search className="h-4 w-4 shrink-0 text-slate-400" />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search ID, street, keyword"
+                placeholder="Search ID, street, keyword, SR"
                 className="h-9 w-full min-w-0 text-sm outline-none"
               />
             </label>
           </div>
         </div>
         <nav className="no-scrollbar -mx-4 mt-3 flex gap-5 overflow-x-auto px-4 text-sm md:mx-0 md:gap-6 md:px-0">
-          {tabs.map((t) => (
+          {TABS.map((t) => (
             <button
               key={t.id}
-              onClick={() => navigate(t.id === 'city' ? '/org/sent' : `/org/issues?tab=${t.id}`)}
-              className={`shrink-0 whitespace-nowrap border-b-2 pb-2.5 ${t.id === activeTab.id ? 'border-ink font-semibold' : 'border-transparent text-slate-600'}`}
+              onClick={() => {
+                setQuery('');
+                navigate(t.id === 'city' ? '/org/sent' : `/org/issues?tab=${t.id}`);
+              }}
+              aria-current={!searching && t.id === activeTab.id ? 'page' : undefined}
+              className={`shrink-0 whitespace-nowrap border-b-2 pb-2.5 -outline-offset-2 ${
+                !searching && t.id === activeTab.id ? 'border-ink font-semibold' : 'border-transparent text-slate-600'
+              }`}
             >
-              {t.label} <span className="text-slate-400">{sourceFor(t).filter(t.filter).length}</span>
+              {t.label} <span className="font-normal text-slate-500">{counts[t.id]}</span>
             </button>
           ))}
         </nav>
@@ -313,34 +440,46 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
             showDetailOnPhone ? 'hidden' : ''
           }`}
         >
-          <li className="border-b border-slate-100 px-4 py-2 text-xs text-slate-500 md:px-5">
-            {list.length} {list.length === 1 ? 'issue' : 'issues'} · sorted by votes
-          </li>
-          {list.map((i) => (
+          <li className="border-b border-slate-100 px-4 py-2 text-xs text-slate-500 md:px-5">{summary}</li>
+          {rows.map(({ issue: i, note }) => (
             <li key={i.id}>
               <button
                 onClick={() => navigate(linkFor(i.id))}
-                className={`block w-full border-b border-slate-100 px-4 py-3 text-left md:px-5 ${
-                  issue?.id === i.id ? 'md:border-l-4 md:border-l-brand md:bg-brand-soft' : 'hover:bg-slate-50'
+                aria-current={issue?.id === i.id ? 'true' : undefined}
+                className={`block w-full border-b border-slate-100 px-4 py-3 text-left -outline-offset-2 md:px-5 ${
+                  issue?.id === i.id ? 'hover:bg-slate-50 md:bg-slate-100 md:hover:bg-slate-100' : 'hover:bg-slate-50'
                 }`}
               >
-                <span className="flex justify-between font-mono text-[11px] text-slate-400">
-                  <span>{i.id}</span>
-                  <span>{i.mergedInto ? `→ ${i.mergedInto}` : i.hidden ? 'hidden' : `${daysBetween(i.createdAt)}d`}</span>
+                <span className="flex justify-between gap-3 text-xs text-slate-500">
+                  <span className="font-mono">{i.id}</span>
+                  {i.mergedInto ? (
+                    <span>
+                      merged into <span className="font-mono">{i.mergedInto}</span>
+                    </span>
+                  ) : (
+                    <span>{i.hidden ? 'hidden' : `pinned ${shortDate(i.createdAt)}`}</span>
+                  )}
                 </span>
                 <span className="block font-medium">{i.title}</span>
                 <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
                   <CategoryTag category={i.category} />
                   <StatusTag status={i.status} />
-                  <span className="font-semibold">^ {i.votes}</span>
+                  <span className="text-slate-500">{plural(i.votes, 'neighbor')}</span>
                 </span>
+                {note && (
+                  <span className={`mt-1 block truncate text-xs ${note.urgent ? 'font-medium text-brand-dark' : 'text-slate-500'}`}>{note.text}</span>
+                )}
                 {i.hidden && i.hiddenReason && <span className="mt-1 block truncate text-xs text-slate-500">{i.hiddenReason}</span>}
               </button>
             </li>
           ))}
-          {!list.length && (
+          {!rows.length && (
             <li className="p-8 text-center text-sm text-slate-500">
-              {activeTab.source === 'hidden' ? 'Nothing hidden or merged.' : 'No issues here.'}
+              {searching
+                ? 'Nothing matches. Try a street, a PP number or an SR number.'
+                : activeTab.id === 'hidden'
+                  ? 'Nothing hidden or merged.'
+                  : 'No issues here.'}
             </li>
           )}
         </ul>
@@ -351,43 +490,33 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
               onClick={() => navigate(`${base}${tabQuery}`)}
               className="-ml-1 mb-3 flex items-center gap-1 text-sm font-medium text-slate-600 md:hidden"
             >
-              <ArrowLeft className="h-4 w-4" /> {activeTab.label}
+              <ArrowLeft className="h-4 w-4" /> {searching ? 'Results' : activeTab.label}
             </button>
             <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-4">
               <div className="min-w-0 flex-1">
-                <p className="font-mono text-[11px] tracking-wider text-slate-500">
-                  {issue.id} · {CATEGORIES[issue.category].label.toUpperCase()} · {issue.locationLabel.toUpperCase()}
+                <p className={labelClass}>
+                  <span className="font-mono font-normal">{issue.id}</span> · {CATEGORIES[issue.category].label} · {issue.locationLabel}
                 </p>
                 <h2 className="mt-1 text-xl font-bold md:text-2xl">{issue.title}</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  <StatusTag status={issue.status} className="text-ink" /> · Opened {shortDate(issue.createdAt)} ·{' '}
-                  {daysBetween(issue.createdAt)} days
+                  <StatusTag status={issue.status} className="text-ink" /> · Pinned {shortDate(issue.createdAt)}
+                  {/* An issue nobody has answered has waited since it was pinned, and the to-do line says how long. */}
+                  {todo?.kind !== 'new' && ` · ${age === 0 ? 'today' : `${plural(age, 'day')} ago`}`}
                 </p>
               </div>
               {!issue.mergedInto && (
                 <div className="flex shrink-0 flex-wrap gap-2">
-                  <button
-                    onClick={() => setDialog('merge')}
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-slate-300"
-                  >
+                  <button onClick={() => setDialog('merge')} className={button}>
                     <GitMerge className="h-4 w-4" /> Merge
                   </button>
                   {!issue.hidden && (
-                    <button
-                      onClick={() => setDialog('hide')}
-                      className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-slate-300"
-                    >
+                    <button onClick={() => setDialog('hide')} className={button}>
                       <EyeOff className="h-4 w-4" /> Hide
                     </button>
                   )}
                   {issue.status !== 'fixed' && (
-                    <button
-                      onClick={async () => {
-                        if (await store.setStatus(issue.id, 'fixed')) store.toast(`${issue.id} marked fixed · residents asked to confirm`);
-                      }}
-                      className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-slate-300"
-                    >
-                      <Check className="h-4 w-4" /> Mark fixed
+                    <button onClick={() => startCompose('fixed')} title="Say what was done; neighbors are then asked to confirm" className={button}>
+                      <Check className="h-4 w-4" /> Mark fixed…
                     </button>
                   )}
                 </div>
@@ -397,8 +526,8 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
             <div className="mt-4 grid gap-5 md:mt-5 xl:grid-cols-[1fr_260px]">
               <div className="min-w-0 space-y-4">
                 <ModerationBanner issue={issue} />
+                {todo && <TodoLine todo={todo} onCompose={startCompose} onHide={() => setDialog('hide')} />}
                 {issue.description && <p className="text-[15px] leading-relaxed text-slate-700">{issue.description}</p>}
-                {!issue.mergedInto && <CityCard issue={issue} />}
                 {issue.photos.length > 0 ? (
                   <div className="grid grid-cols-3 gap-2">
                     {issue.photos.slice(0, issue.photos.length > 3 ? 2 : 3).map((_, idx) => (
@@ -413,22 +542,10 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
                     )}
                   </div>
                 ) : (
-                  <p className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-500">No photos with this report.</p>
+                  <p className="text-sm text-slate-500">No photos with this report.</p>
                 )}
-                <VotesSummary issue={issue} />
-                {!issue.mergedInto && <UpdateResidents issue={issue} />}
-                {issue.updates.length > 0 && (
-                  <div className="rounded-xl border border-slate-200 bg-white p-4">
-                    <h3 className="mb-2 font-mono text-[10px] tracking-wider text-slate-500">POSTED ON THE PUBLIC PAGE</h3>
-                    {issue.updates.map((u) => (
-                      <div key={u.id} className="border-t border-slate-100 py-2 text-sm first:border-t-0">
-                        <span className="font-semibold">{u.author}</span>{' '}
-                        <span className="font-mono text-[11px] text-slate-400">{shortDate(u.date)}</span>
-                        <p className="text-slate-700">{u.text}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {!issue.mergedInto && <CityCard issue={issue} todo={todo} />}
+                <ResidentsThread issue={issue} compose={compose} canPost={!issue.mergedInto} />
               </div>
 
               <aside className="min-w-0 space-y-4">
@@ -441,35 +558,24 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
                     onSelect={(i) => navigate(linkFor(i.id))}
                   />
                 </div>
-                <dl className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white text-sm">
-                  {[
-                    ['Owner', issue.owner ?? 'Unassigned'],
-                    ['Votes', `${issue.votes} (+${issue.votesThisWeek} this week)`],
-                    ['Following', issue.following],
-                    ['Duplicates merged', issue.duplicatesMerged],
-                    ['Confirmed fixed', issue.confirmedFixed],
-                    ['Came in through', issue.via],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex justify-between gap-3 px-3 py-2">
-                      <dt className="text-slate-500">{k}</dt>
-                      <dd className="text-right font-medium">{v}</dd>
-                    </div>
-                  ))}
-                </dl>
+                <Facts issue={issue} />
                 <div>
-                  <h3 className="mb-2 font-mono text-[10px] tracking-wider text-slate-500">ACTIVITY</h3>
+                  <h3 className={`${labelClass} mb-2`}>Activity</h3>
                   <ol className="space-y-1.5 text-sm">
                     {[...issue.history].reverse().map((h, idx) => (
                       <li key={idx} className="flex gap-3">
-                        <span className="w-12 shrink-0 font-mono text-[11px] text-slate-400">{shortDate(h.date)}</span>
-                        <span>{h.text}</span>
+                        <span className="w-12 shrink-0 text-slate-500">{shortDate(h.date)}</span>
+                        <span>
+                          {h.text}
+                          {h.staffName && <span className="text-slate-500"> · {h.staffName}</span>}
+                        </span>
                       </li>
                     ))}
                   </ol>
                 </div>
-                <button onClick={() => navigate(`/i/${issue.id}`)} className="text-sm font-semibold text-brand">
-                  View resident page →
-                </button>
+                <a href={`#/i/${issue.id}`} className={`${linkClass} inline-block text-sm`}>
+                  View resident page
+                </a>
               </aside>
             </div>
             {dialog === 'merge' && <MergeDialog issue={issue} onClose={() => setDialog(null)} />}
@@ -482,7 +588,7 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
                 <p>
                   There’s no issue <span className="font-mono">{selectedId}</span>.
                 </p>
-                <button onClick={() => navigate(`${base}${tabQuery}`)} className="mt-2 font-semibold text-brand">
+                <button onClick={() => navigate(`${base}${tabQuery}`)} className={`${linkClass} mt-2`}>
                   Back to {activeTab.label}
                 </button>
               </div>
