@@ -61,9 +61,9 @@ export default function Account({ next, from }: { next: string | null; from: str
         <p className={`mt-2 ${TEXT}`}>
           The problems you pinned, +1’d and follow are kept on this phone, under{' '}
           <a href="#/updates" className={LINK}>
-            Your updates
+            You
           </a>
-          .
+          , behind the person button on the map.
         </p>
       </>
     );
@@ -272,7 +272,7 @@ function SignIn({ next, from }: { next: string; from: string | null }) {
 function SignedIn() {
   const store = useStore();
   const account = store.account!;
-  // Same set as Your updates: what this account pinned, +1’d or follows.
+  // Same set as the You page: what this account pinned, +1’d or follows.
   const ids = new Set([...store.voted, ...store.following]);
   const saved = store.issues.filter((i) => ids.has(i.id) || i.isUserReport).length;
 
@@ -288,13 +288,13 @@ function SignedIn() {
           ? `${plural(saved, 'problem')} you pinned, +1’d or follow ${saved === 1 ? 'is' : 'are'} saved with this email, with your notes and answers.`
           : 'Nothing saved yet. What you pin, +1 or follow from now on is saved with this email.'}{' '}
         <a href="#/updates" className={LINK}>
-          See them in Your updates
+          See them under You
         </a>
       </p>
 
       <h2 className={`mt-7 ${LABEL}`}>On another phone</h2>
       <p className={`mt-1 ${TEXT}`}>
-        Open Problem Pins, go to Your updates and sign in with this email. What you did on that phone is added, and a problem you
+        Open Problem Pins, tap the person button on the map and sign in with this email. What you did on that phone is added, and a problem you
         +1’d on both counts once.
       </p>
 

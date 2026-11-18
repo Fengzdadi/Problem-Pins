@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { SlidersHorizontal, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { CategoryTag, SampleBadge, StatusTag, labelClass, linkClass } from '../components/ui';
@@ -19,14 +19,27 @@ const AGE_OPTIONS = [
   { label: '30 days', days: 30 },
 ];
 
-export default function OrgMap() {
+const OPEN_STATUSES: Status[] = ['open', 'in_review', 'scheduled', 'sent_to_city'];
+
+/** `issueId` comes from the URL (`#/org/map?issue=PP-2402`, the link on an issue's page): that issue opens selected and centered. */
+export default function OrgMap({ issueId }: { issueId?: string | null }) {
   const { issues, district } = useStore();
+  const linked = issueId ? issues.find((i) => i.id === issueId) : undefined;
   const [categories, setCategories] = useState<Category[]>(district.categories);
-  const [statuses, setStatuses] = useState<Status[]>(['open', 'in_review', 'scheduled', 'sent_to_city']);
+  const [statuses, setStatuses] = useState<Status[]>(OPEN_STATUSES);
   const [minAge, setMinAge] = useState(0);
   const [sizeByVotes, setSizeByVotes] = useState(true);
-  const [mode, setMode] = useState<'pins' | 'heat'>('pins');
+  const [onlyTodo, setOnlyTodo] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Arriving from an issue's page: select it, and show its status even if the filters leave it out (a fixed one).
+  const linkedId = linked?.id;
+  const linkedStatus = linked?.status;
+  useEffect(() => {
+    if (!linkedId || !linkedStatus) return;
+    setSelectedId(linkedId);
+    setStatuses((s) => (s.includes(linkedStatus) ? s : [...s, linkedStatus]));
+  }, [linkedId, linkedStatus]);
+  const center = useMemo(() => (linked ? { lat: linked.lat, lng: linked.lng } : undefined), [linked?.lat, linked?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
   // Below 1024px an always-open filter panel would cover the issue card and much of the map, so
   // there it opens on demand, as on phones. Picking a pin closes it.
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -34,12 +47,25 @@ export default function OrgMap() {
   // bottom right, since the filters take the top left.
   const wide = useMediaQuery('(min-width: 768px)');
 
+  const now = today();
+  // "What needs me, and where": the same issues as the Overview's to-do list.
+  const onTodoList = useMemo(
+    () => new Set(issues.filter((i) => todoFor(i, district.rules, now)).map((i) => i.id)),
+    [issues, district.rules, now],
+  );
   const visible = issues.filter(
-    (i) => categories.includes(i.category) && statuses.includes(i.status) && daysBetween(i.createdAt) >= minAge,
+    (i) =>
+      categories.includes(i.category) &&
+      daysBetween(i.createdAt) >= minAge &&
+      // The to-do list decides on its own which statuses belong (a fixed issue neighbors dispute is on it),
+      // so with it on, the status boxes don't hide anything from it.
+      (onlyTodo ? onTodoList.has(i.id) : statuses.includes(i.status)),
   );
   const selected = visible.find((i) => i.id === selectedId);
-  const now = today();
+  // The filter panel is always open from 1024px, so the district is framed clear of it.
+  const panelOpen = useMediaQuery('(min-width: 1024px)');
   const todo = selected ? todoFor(selected, district.rules, now) : null;
+  const withCity = Boolean(selected?.cityRequest && selected.status === 'sent_to_city');
 
   const toggle = <T,>(list: T[], value: T, set: (v: T[]) => void) =>
     set(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
@@ -48,7 +74,8 @@ export default function OrgMap() {
   const count = 'ml-auto text-xs text-slate-500';
 
   return (
-    <div className="relative h-full">
+    // `district-map` (index.css): a paler base map, and no seams between tiles at a between-levels zoom.
+    <div className="district-map relative h-full">
       <IssueMap
         issues={visible}
         selectedId={selectedId}
@@ -56,8 +83,10 @@ export default function OrgMap() {
           setSelectedId(i.id);
           setFiltersOpen(false);
         }}
+        center={center}
+        zoom={center ? 17 : undefined}
+        fit={{ topLeft: panelOpen ? [290, 24] : [24, 64], bottomRight: [24, 40] }}
         sizeByVotes={sizeByVotes}
-        heat={mode === 'heat'}
         zoomControl={wide}
         zoomPosition="bottomright"
       />
@@ -77,12 +106,15 @@ export default function OrgMap() {
         }`}
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-          <h2 className="font-semibold">Filters</h2>
+          <h2 className="font-semibold">
+            Filters <span className="ml-1 text-xs font-normal text-slate-500">{visible.length} shown</span>
+          </h2>
           <button
             className={`${linkClass} ml-auto mr-3 lg:mr-0`}
             onClick={() => {
               setCategories(district.categories);
-              setStatuses(['open', 'in_review', 'scheduled', 'sent_to_city']);
+              setStatuses(OPEN_STATUSES);
+              setOnlyTodo(false);
               setMinAge(0);
             }}
           >
@@ -91,6 +123,13 @@ export default function OrgMap() {
           <button onClick={() => setFiltersOpen(false)} aria-label="Close filters" className="lg:hidden">
             <X className="h-4 w-4" />
           </button>
+        </div>
+        <div className="border-b border-slate-100 px-4 py-3">
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)} className="accent-ink" />
+            Only the to-do list
+            <span className={count}>{onTodoList.size}</span>
+          </label>
         </div>
         <div className="border-b border-slate-100 px-4 py-3">
           <p className={`${labelClass} mb-1.5`}>Category</p>
@@ -135,18 +174,6 @@ export default function OrgMap() {
 
       <div className="absolute right-3 top-3 z-[1000] flex items-center gap-3 md:right-4 md:top-4">
         <SampleBadge />
-        <div className="flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm shadow-sm">
-          {(['pins', 'heat'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              aria-pressed={mode === m}
-              className={`rounded-md px-3 py-1 capitalize ${mode === m ? 'bg-ink font-medium text-white' : 'text-slate-600'}`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
       </div>
 
       {selected && (
@@ -164,31 +191,25 @@ export default function OrgMap() {
             <CategoryTag category={selected.category} />
             <StatusTag status={selected.status} />
           </p>
-          {/* The same rows, in the same words, as the facts beside an issue on the Issues page. */}
-          <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-            <dt className="text-slate-500">Neighbors</dt>
-            <dd>
-              {selected.votes} (+{selected.votesThisWeek} this week)
-            </dd>
-            <dt className="text-slate-500">Open</dt>
-            <dd>
-              {plural(daysBetween(selected.createdAt), 'day')}, since {shortDate(selected.createdAt)}
-            </dd>
-            <dt className="text-slate-500">Owner</dt>
-            <dd>{selected.owner ?? 'Unassigned'}</dd>
-          </dl>
-          {/* The same words as the Overview and the Issues list: why it's on the to-do list and for how long,
-              or, for an issue with the City that isn't due a follow-up yet, how long since the last contact. */}
+          {/* One line of facts, short enough not to wrap and none of them said again further down: how many
+              neighbors, when it was pinned (or fixed), and who has it. The week's change is on the issue page. An agency that has it is named with its 311 request below instead. */}
+          <p className="mt-2 text-sm text-slate-600">
+            {plural(selected.votes, 'neighbor')} ·{' '}
+            {selected.status === 'fixed' ? `fixed ${shortDate(selected.fixedOn ?? selected.createdAt)}` : `pinned ${shortDate(selected.createdAt)}`}
+            {withCity ? '' : ` · ${selected.owner ?? 'unassigned'}`}
+          </p>
+          {/* Why it's on the to-do list and for how long, in the Overview's words; or, for an issue with the
+              City that isn't due a follow-up yet, how long since the last contact. */}
           {todo ? (
             <div className="mt-3 rounded-lg bg-brand-soft px-3 py-2 text-xs">
               <p className="font-semibold text-brand-dark">{todoHeadline(todo)}</p>
-              <p className="mt-0.5 text-slate-700">{todo.reason}</p>
+              {/* For an unanswered pin the note is its neighbor count, which the line above already gives. */}
+              {todo.kind !== 'new' && <p className="mt-0.5 text-slate-700">{todo.note}</p>}
             </div>
           ) : (
-            selected.status === 'sent_to_city' &&
-            selected.cityRequest && (
+            withCity && (
               <p className="mt-3 text-xs text-slate-600">
-                {selected.cityRequest.agency} · {cityWait(selected.cityRequest, now)}
+                {selected.cityRequest!.agency} · {cityWait(selected.cityRequest!, now)}
               </p>
             )
           )}
@@ -204,12 +225,11 @@ export default function OrgMap() {
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 z-[1000] hidden gap-4 rounded-lg md:flex border border-slate-200 bg-white px-4 py-2 text-xs shadow-sm">
+      {/* The key to the colors, only where the filter panel (which shows the same ones) isn't always open. */}
+      <div className="absolute bottom-4 left-4 z-[1000] hidden gap-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs shadow-sm md:flex lg:hidden">
         {STATUS_ORDER.map((s) => (
           <StatusTag key={s} status={s} />
         ))}
-        {/* Below 1024px the Filters button shows the count, and the legend has to clear the zoom buttons. */}
-        <span className="hidden text-slate-500 lg:inline">· {visible.length} shown</span>
       </div>
     </div>
   );

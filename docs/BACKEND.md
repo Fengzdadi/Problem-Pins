@@ -104,7 +104,7 @@ by side instead of one after the other.
 
 **Writes.** Every mutation is a Postgres function (RPC): `create_issue`, `vote`, `unvote`,
 `follow`, `unfollow`, `comment`, `delete_note`, `confirm_fix`, `remove_issue`, `report_issue`, and
-for staff `post_update`, `set_status`, `assign`, `send_to_city`, `nudge_city`, `hide_issue`,
+for staff `post_update`, `reply_to_note`, `set_status`, `assign`, `send_to_city`, `nudge_city`, `hide_issue`,
 `unhide_issue`, `dismiss_reports`, `merge_issue`, `save_scan_point`, `delete_scan_point`,
 `list_events`, and for resident accounts `resident_account`, `device_claim`, `merge_device`,
 `delete_resident_account`. They run as `security definer` with a fixed `search_path` and check the caller
@@ -113,9 +113,15 @@ database error becomes "Something went wrong. Please try again." Every staff act
 writes the staff member's name on its history line (and on a district update), from the `staff`
 table.
 
+**Replies** (`20261118000000_note_replies_and_hiding.sql`). A neighbor's note can have replies, one level
+deep: `issue_updates.reply_to` points at the note. Neighbors reply with `comment(p_issue, p_text,
+p_reply_to)`, staff with `reply_to_note`; a reply to a reply is stored under the same note. A
+district reply is not a district update: the resident page shows it under the note, not on the
+status card. Someone's reply to a device's note brings that problem onto its You page.
+
 **Taking things back.** A device can take back its +1 (`unvote`; not on its own pin, whose +1
 stays), stop following (`unfollow`, which also deletes any contact it left for that issue) and
-delete a note it wrote (`delete_note`; the row is deleted). The device that pinned an issue can
+delete a note it wrote (`delete_note`; the row is deleted, with the replies under it). The device that pinned an issue can
 remove it (`remove_issue`) while the office hasn't acted on it (still Open, no owner, no district
 update, no City request, no merged duplicate) and no other device has +1'd it. Removing hides the
 issue with the reason "Removed by the person who pinned it", so staff still find it under Hidden
@@ -172,7 +178,7 @@ docs/ARCHITECTURE.md ("Accounts stay optional", "Decisions so far"); this is how
 
 **Why a resident would add one.** The device's anonymous identity lives in the browser's storage.
 A new phone, a cleared browser or Safari's clean-up of sites not visited for a while loses it, and
-with it Your updates. An account keeps the pins, +1s, follows, notes and fix answers with an email.
+with it the You page. An account keeps the pins, +1s, follows, notes and fix answers with an email.
 It also makes counts more accurate: one person on two phones is one +1 once both are signed in.
 
 **Signing in** (`src/backend/supabase/index.ts`, migration `20261116000000_resident_accounts.sql`):

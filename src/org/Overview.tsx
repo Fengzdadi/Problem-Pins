@@ -1,28 +1,28 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowRight, Check, Copy, QrCode } from 'lucide-react';
-import { SampleBadge, labelClass, linkClass } from '../components/ui';
+import { CATEGORY_ICONS, SampleBadge, labelClass, linkClass } from '../components/ui';
 import { config } from '../config';
-import type { AnalyticsEvent, AttentionRules } from '../data/types';
+import { CATEGORIES } from '../data/meta';
+import type { AnalyticsEvent, AttentionRules, Category } from '../data/types';
 import { EXPERIMENT_THRESHOLDS } from '../lib/experimentSettings';
-import { addDays, formatHours, plural, today } from '../lib/format';
+import { addDays, formatHours, plural, shortDate, today } from '../lib/format';
 import { checkThreshold } from '../lib/metrics';
 import { displayLink } from '../lib/qr';
 import { navigate } from '../router';
 import { useStore } from '../store';
 import { TodoAction } from './actions';
-import { TODO_GROUPS, cityFigures, firstResponse, fixedFigures, todoList, waited, type TodoItem } from './dashboard';
+import { TODO_GROUPS, cityFigures, firstResponse, intakeFigures, todoList, waited, type TodoItem } from './dashboard';
+import { Photos } from './Photos';
+import { UpdateComposer } from './UpdateComposer';
 
 const card = 'rounded-xl border border-slate-200 bg-white';
 const button = 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium hover:border-slate-300';
 
-/** "Thursday, Nov 13" */
-function dayLabel(date: string) {
-  return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
-}
-
 /**
- * The staff home page for a community district office: who is waiting on the office today, and
- * three figures for how it's going. Monthly figures live in Reports; scans per poster on the QR posters page.
+ * The staff home page for a community district office. The to-do list is the page: who is waiting
+ * on the office today, answerable without leaving the list. Three figures for how it's going sit
+ * beside it on a wide screen and under it otherwise. Nothing here says a thing twice: the district's
+ * name is in the sidebar, the rule behind each group is in Settings, monthly figures are in Reports.
  */
 export default function Overview() {
   const { issues, hiddenIssues, district, listEvents } = useStore();
@@ -42,37 +42,24 @@ export default function Overview() {
   const nothingPinned = issues.length === 0 && hiddenIssues.length === 0;
 
   return (
-    <div className="mx-auto max-w-[1000px] space-y-5 px-4 py-5 md:px-8 md:py-7">
+    <div className="mx-auto max-w-[1000px] space-y-5 px-4 py-5 md:px-8 md:py-7 xl:max-w-[1180px]">
       <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <p className={labelClass}>{dayLabel(now)}</p>
-          <h1 className="text-xl font-bold md:text-2xl">{district.name}</h1>
-        </div>
+        <h1 className="text-xl font-bold md:text-2xl">
+          To do
+          {todo.length > 0 && <span className="ml-2 text-base font-medium tabular-nums text-slate-500">{todo.length}</span>}
+        </h1>
         <SampleBadge />
       </header>
 
       {nothingPinned ? (
         <GetStarted />
       ) : (
-        <>
-          <Figures events={events} />
-          <section className={card}>
-            <div className="border-b border-slate-100 px-4 py-3.5 md:px-5">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold">To do</h2>
-                <span className="text-sm text-slate-500">{todo.length}</span>
-              </div>
-              {todo.length > 0 && <TodoSummary items={todo} />}
-            </div>
-            {todo.length ? <TodoGroups items={todo} rules={district.rules} /> : <AllClear rules={district.rules} />}
+        <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <section className={`${card} overflow-hidden`}>
+            {todo.length ? <TodoGroups items={todo} /> : <AllClear rules={district.rules} />}
           </section>
-          <p className="text-sm text-slate-500">
-            Monthly figures, fix times and what’s waiting on each agency are in{' '}
-            <a href="#/org/reports" className={linkClass}>
-              Reports
-            </a>
-          </p>
-        </>
+          <Figures events={events} />
+        </div>
       )}
     </div>
   );
@@ -82,7 +69,7 @@ function Figures({ events }: { events: AnalyticsEvent[] | null }) {
   const { issues } = useStore();
   const now = today();
   const city = cityFigures(issues, now);
-  const fixed = fixedFigures(issues, now);
+  const intake = intakeFigures(issues, now);
   const response = events && firstResponse(events, now);
   const before = events && firstResponse(events, addDays(now, -30));
   const target = EXPERIMENT_THRESHOLDS.staffResponseHours;
@@ -106,132 +93,151 @@ function Figures({ events }: { events: AnalyticsEvent[] | null }) {
   }
 
   return (
-    <div className={`${card} grid gap-px overflow-hidden bg-slate-200 sm:grid-cols-3`}>
+    <div className={`${card} grid gap-px overflow-hidden bg-slate-200 sm:grid-cols-3 xl:grid-cols-1`}>
+      <Figure
+        label="New in the last 7 days"
+        value={intake.count}
+        note={[
+          intake.count ? (intake.answered === intake.count ? 'All answered' : `${intake.answered} answered so far`) : '',
+          `${intake.before} the week before`,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      />
+      <Figure
+        label="Waiting on the City"
+        value={city.count}
+        note={city.count ? city.byAgency.map((a) => `${a.agency} ${a.count}`).join(' · ') : 'Nothing with the City right now'}
+      />
       <Figure
         label="Median first response"
         value={response ? formatHours(response.medianHours) : '…'}
         note={responseNote}
         tone={responseTone}
       />
-      <Figure
-        label="Waiting on the City"
-        value={city.count}
-        note={
-          city.count
-            ? `Oldest ${plural(city.oldestDays!, 'day')} · ${city.byAgency.map((a) => `${a.agency} ${a.count}`).join(', ')}`
-            : 'Nothing with the City right now'
-        }
-        onClick={() => navigate('/org/sent')}
-      />
-      <Figure
-        label="Fixed in the last 30 days"
-        value={fixed.count}
-        note={
-          fixed.count
-            ? `${fixed.confirmed} confirmed by neighbors${fixed.disputed ? ` · ${fixed.disputed} disputed` : ''}`
-            : 'Nothing marked fixed in that time'
-        }
-        onClick={() => navigate('/org/issues?tab=fixed')}
-      />
     </div>
   );
 }
 
-function Figure({
-  label,
-  value,
-  note,
-  tone = 'text-slate-500',
-  onClick,
-}: {
-  label: string;
-  value: ReactNode;
-  note: string;
-  tone?: string;
-  onClick?: () => void;
-}) {
-  const body = (
-    <>
-      <p className={`flex items-center gap-1 ${labelClass}`}>
-        {label}
-        {onClick && <ArrowRight className="h-3 w-3" />}
-      </p>
-      <p className="mt-1 text-2xl font-bold md:text-3xl">{value}</p>
-      <p className={`mt-1 text-xs ${tone}`}>{note}</p>
-    </>
-  );
-  const box = 'bg-white px-4 py-3.5 text-left md:px-5 md:py-4';
-  return onClick ? (
-    <button onClick={onClick} className={`${box} hover:bg-slate-50`}>
-      {body}
-    </button>
-  ) : (
-    <div className={box}>{body}</div>
-  );
-}
-
-/** One chip per group, so the shape of the day shows before any scrolling. */
-function TodoSummary({ items }: { items: TodoItem[] }) {
+/**
+ * One figure beside the to-do list: what it is, the number, a note under it. The number is large
+ * on purpose: this card is the one place that shows how things stand at a glance. Nothing here is
+ * a link; the sidebar already leads to each of these.
+ */
+function Figure({ label, value, note, tone = 'text-slate-500' }: { label: string; value: ReactNode; note: string; tone?: string }) {
   return (
-    <div className="mt-2.5 flex flex-wrap gap-2">
-      {TODO_GROUPS.map((group) => {
-        const count = items.filter((t) => t.kind === group.kind).length;
-        if (!count) return null;
-        return (
-          <button
-            key={group.kind}
-            onClick={() => document.getElementById(`todo-${group.kind}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            className="flex items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600 hover:border-slate-300 hover:text-ink"
-          >
-            {group.title}
-            <span className="font-semibold tabular-nums text-ink">{count}</span>
-          </button>
-        );
-      })}
+    <div className="bg-white px-4 py-3.5 md:px-5 md:py-4">
+      <p className={labelClass}>{label}</p>
+      <p className="mt-1 text-2xl font-bold tabular-nums md:text-3xl">{value}</p>
+      <p className={`mt-1 text-xs ${tone}`}>{note}</p>
     </div>
   );
 }
 
-function TodoGroups({ items, rules }: { items: TodoItem[]; rules: AttentionRules }) {
+function TodoGroups({ items }: { items: TodoItem[] }) {
+  // One reply box at a time. It closes itself when the answered issue leaves the list.
+  const [openId, setOpenId] = useState<string | null>(null);
   const groups = TODO_GROUPS.map((group) => {
     const rows = items.filter((t) => t.kind === group.kind);
     if (!rows.length) return null;
     return (
       <div key={group.kind}>
-        <div
-          id={`todo-${group.kind}`}
-          className="flex scroll-mt-3 flex-wrap items-baseline gap-x-2 border-b border-slate-100 bg-slate-50 px-4 py-2 md:px-5"
-        >
-          <h3 className="text-sm font-semibold">{group.title}</h3>
-          <span className="w-full text-xs text-slate-500 sm:ml-auto sm:w-auto">{group.rule(rules)}</span>
+        <div className="flex items-baseline gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2 md:px-5">
+          <h2 className="text-sm font-semibold">{group.title}</h2>
+          <span className="text-sm tabular-nums text-slate-500">{rows.length}</span>
         </div>
-        {rows.map((t) => (
-          // The title is the link; it is stretched over the row, so the whole row opens the issue and the action stays its own button.
-          <div
-            key={t.issue.id}
-            className="relative flex flex-col items-start gap-2 border-b border-slate-100 px-4 py-3 last:border-b-0 hover:bg-slate-50 sm:flex-row sm:items-center sm:gap-4 md:px-5"
-          >
-            <div className="w-full min-w-0 flex-1">
-              <p className="sm:truncate">
-                <span className="mr-2 font-mono text-xs text-slate-500">{t.issue.id}</span>
-                <a
-                  href={`#/org/issues/${t.issue.id}`}
-                  className="font-semibold outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-ink"
-                >
-                  {t.issue.title}
-                </a>
-              </p>
-              <p className="text-sm font-semibold sm:hidden">{t.days ? `Waiting ${waited(t.days)}` : 'Today'}</p>
-              <p className="mt-0.5 text-sm text-slate-500 sm:truncate">{t.reason}</p>
+        {rows.map((t) => {
+          const open = openId === t.issue.id;
+          return (
+            <div key={t.issue.id} className="border-b border-slate-100 last:border-b-0">
+              {/* The title is the link; it is stretched over the row, so the whole row opens the issue and the action stays its own button. */}
+              <div
+                className={`relative flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 md:px-5 ${
+                  open ? '' : 'hover:bg-slate-50'
+                }`}
+              >
+                <div className="w-full min-w-0 flex-1">
+                  <p className="sm:truncate">
+                    <span className="mr-2 font-mono text-xs text-slate-500">{t.issue.id}</span>
+                    <a
+                      href={`#/org/issues/${t.issue.id}`}
+                      className="font-semibold outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-ink"
+                    >
+                      {t.issue.title}
+                    </a>
+                  </p>
+                  <p className="text-sm font-semibold sm:hidden">{t.days ? `Waiting ${waited(t.days)}` : 'Today'}</p>
+                  <p className="mt-0.5 text-sm text-slate-500 sm:truncate">
+                    {/* The category hints at whose problem it is. A City row already names the agency. */}
+                    {t.kind !== 'city' && <CategoryInLine category={t.issue.category} />}
+                    {t.note}
+                  </p>
+                </div>
+                <p className="hidden w-[72px] shrink-0 text-right text-sm font-semibold tabular-nums sm:block">{waited(t.days)}</p>
+                <TodoAction item={t} open={open} onCompose={() => setOpenId(open ? null : t.issue.id)} />
+              </div>
+              {open && <ReplyInPlace item={t} onDone={() => setOpenId(null)} />}
             </div>
-            <p className="hidden w-[72px] shrink-0 text-right text-sm font-semibold tabular-nums sm:block">{waited(t.days)}</p>
-            <TodoAction item={t} />
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   });
   return <>{groups}</>;
+}
+
+/** A category inside a line of text: the icon is inline and sits on the baseline, where the flex `CategoryTag` rides high. */
+function CategoryInLine({ category }: { category: Category }) {
+  const Icon = CATEGORY_ICONS[category];
+  return (
+    <>
+      <Icon className="mr-1 inline h-3.5 w-3.5 align-[-0.15em]" aria-hidden />
+      {CATEGORIES[category].label} ·{' '}
+    </>
+  );
+}
+
+/**
+ * Answering from the list: what the resident wrote, then the same box as on the issue page.
+ * Forwarding to 311, assigning and hiding stay on the issue page.
+ */
+function ReplyInPlace({ item, onDone }: { item: TodoItem; onDone: () => void }) {
+  const { issue, kind } = item;
+  const last = issue.updates.filter((u) => !u.hidden).at(-1);
+  const said = kind === 'residents' && last?.role === 'resident' ? last : null;
+  return (
+    <div className="space-y-3 bg-slate-50 px-4 py-4 md:px-5">
+      {said ? (
+        <div className="text-sm">
+          <p className="flex flex-wrap items-baseline gap-x-2">
+            <span className="font-semibold">{said.author}</span>
+            <span className="text-xs text-slate-500">{shortDate(said.date)}</span>
+          </p>
+          <p className="text-slate-700">{said.text}</p>
+        </div>
+      ) : (
+        kind === 'new' && (
+          <div className="text-sm">
+            {issue.description && <p className="text-slate-700">{issue.description}</p>}
+            <p className="text-slate-500">{issue.locationDetail ?? issue.locationLabel}</p>
+            {issue.photos.length > 0 && (
+              <div className="mt-2">
+                <Photos photos={issue.photos} label={issue.id} size="h-24" />
+              </div>
+            )}
+          </div>
+        )
+      )}
+      <UpdateComposer issue={issue} picker autoFocus onPosted={onDone} onCancel={onDone} />
+      <p className="text-sm text-slate-500">
+        To forward it to 311, assign it or hide it,{' '}
+        <a href={`#/org/issues/${issue.id}`} className={linkClass}>
+          open the issue
+        </a>
+        .
+      </p>
+    </div>
+  );
 }
 
 function AllClear({ rules }: { rules: AttentionRules }) {

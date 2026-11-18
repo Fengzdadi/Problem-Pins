@@ -66,7 +66,7 @@ export default function Reports({ month: wanted }: { month?: string | null }) {
   const waiting = cityFigures(issues, now).count;
   const notFiled = listed - waiting;
   const quotes = issues
-    .flatMap((i) => i.updates.filter((u) => u.role === 'resident' && !u.mine && monthOf(u.date) === month).map((u) => ({ u, i })))
+    .flatMap((i) => i.updates.filter((u) => u.role === 'resident' && !u.mine && !u.hidden && monthOf(u.date) === month).map((u) => ({ u, i })))
     .slice(0, 2);
 
   // The summary only states what the figures show.

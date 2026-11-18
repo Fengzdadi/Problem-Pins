@@ -3,7 +3,7 @@ import { DEMO_DISTRICT } from '../data/demoDistrict';
 import { SAMPLE_ISSUES } from '../data/sampleData';
 import type { AnalyticsEvent, Issue } from '../data/types';
 import { addDays } from '../lib/format';
-import { cityFigures, firstResponse, fixedFigures, todoFor, todoHeadline, todoList, untouched, waited } from './dashboard';
+import { cityFigures, firstResponse, fixedFigures, intakeFigures, todoFor, todoHeadline, todoList, untouched, waited } from './dashboard';
 import { RULES, TODAY, issue, partner, request, resident } from './testFixtures';
 
 describe('todoFor', () => {
@@ -13,9 +13,21 @@ describe('todoFor', () => {
     expect(todoFor(issue({ createdAt: '2026-10-11', votes: 3 }), RULES, TODAY)).toMatchObject({ days: 3, reason: 'Pinned Oct 11 · 3 neighbors' });
   });
 
+  it('has a note without the date, for rows that show the days beside it', () => {
+    const note = (i: Issue) => todoFor(i, RULES, TODAY)?.note;
+    expect(note(issue({ createdAt: '2026-10-11', votes: 3 }))).toBe('3 neighbors');
+    expect(note(issue({ status: 'fixed', fixedOn: '2026-09-04', notFixed: 2 }))).toBe('Marked fixed · 2 neighbors say it isn’t');
+    expect(note(issue({ status: 'in_review', updates: [resident('2026-10-12', 'Still dark.')] }))).toBe('A neighbor: “Still dark.”');
+    expect(note(issue({ status: 'sent_to_city', cityRequest: request('2026-09-01') }))).toBe('NYC DOT · SR 311-12345678 · no follow-up yet');
+    expect(note(issue({ status: 'sent_to_city', cityRequest: request('2026-09-01', '2026-09-20') }))).toBe(
+      'NYC DOT · SR 311-12345678 · since the last follow-up',
+    );
+    expect(note(issue({ status: 'scheduled', updates: [partner('2026-09-20')] }))).toBe('Scheduled · nothing since the last update');
+  });
+
   it('says how long an item has waited', () => {
     expect([waited(0), waited(1), waited(34)]).toEqual(['Today', '1 day', '34 days']);
-    const item = (kind: 'new' | 'city', days: number) => ({ issue: issue({}), kind, days, reason: '' });
+    const item = (kind: 'new' | 'city', days: number) => ({ issue: issue({}), kind, days, reason: '', note: '' });
     expect([todoHeadline(item('new', 34)), todoHeadline(item('city', 0))]).toEqual([
       'Not answered yet · 34 days',
       'Follow up with the City · today',
@@ -122,6 +134,21 @@ describe('todoList', () => {
 });
 
 describe('figures', () => {
+  it('counts what was pinned in the last 7 days, how much of it has an answer, and the 7 days before', () => {
+    const issues = [
+      issue({ id: 'A', createdAt: '2026-10-14' }), // today, nobody has touched it
+      issue({ id: 'B', createdAt: '2026-10-08', status: 'in_review' }), // first day of the window, answered
+      issue({ id: 'C', createdAt: '2026-10-10', updates: [partner('2026-10-11')] }), // answered with an update
+      issue({ id: 'D', createdAt: '2026-10-07' }), // last day of the window before
+      issue({ id: 'E', createdAt: '2026-10-01' }), // first day of the window before
+      issue({ id: 'F', createdAt: '2026-09-30' }), // too old for either
+      issue({ id: 'G', createdAt: '2026-10-12', hidden: true }), // hidden pins don't count
+      issue({ id: 'H', createdAt: '2026-10-12', mergedInto: 'A' }), // nor do merged duplicates
+    ];
+    expect(intakeFigures(issues, TODAY)).toEqual({ count: 3, answered: 2, before: 2 });
+    expect(intakeFigures([], TODAY)).toEqual({ count: 0, answered: 0, before: 0 });
+  });
+
   it('counts what is waiting on the City, by agency', () => {
     const f = cityFigures(
       [

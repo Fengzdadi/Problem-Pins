@@ -106,7 +106,7 @@ Every screen follows these. The shared classes are in `src/components/ui.tsx` (`
   or "the district office". No screen promises a text or email while `config.notifications` is off.
 - **Accounts stay optional.** Scan → +1 and pinning never ask for an email. The account is offered
   only after something is saved and only as a plain link (never orange, never a banner or a modal):
-  in Your updates, in a new pin's "Your pin is live" card, and in About. Never on the scan landing
+  on the You page, in a new pin's "Your pin is live" card, and in About. Never on the scan landing
   or an issue page, where the +1 happens. The words are "Keep … with your email" and "Sign in",
   never "Sign up", "Create an account" or "Register", and every offer says what it is for (a new
   phone, a cleared browser). Screens say where problems are kept: "on this phone" or "in your

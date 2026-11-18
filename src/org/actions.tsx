@@ -15,10 +15,21 @@ export function copySr(sr: string, toast: (message: string) => void) {
 }
 
 /**
- * What to do about a to-do item: log a City follow-up right here, or open the issue to review reports, respond, reply or post an update.
- * `relative` keeps it above a row whose title link is stretched over the whole row.
+ * What to do about a to-do item: log a City follow-up right here, review reports on the issue page, or respond,
+ * reply or post an update. With `onCompose` that last one opens a box in place (`open` says it is showing);
+ * without it, it opens the issue. `relative` keeps it above a row whose title link is stretched over the whole row.
  */
-export function TodoAction({ item, block = false }: { item: TodoItem; block?: boolean }) {
+export function TodoAction({
+  item,
+  block = false,
+  open = false,
+  onCompose,
+}: {
+  item: TodoItem;
+  block?: boolean;
+  open?: boolean;
+  onCompose?: () => void;
+}) {
   const { nudgeCity, toast } = useStore();
   const { issue, kind } = item;
   const button = `relative flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold hover:border-slate-300 ${
@@ -53,6 +64,13 @@ export function TodoAction({ item, block = false }: { item: TodoItem; block?: bo
   }
 
   const label = kind === 'quiet' ? 'Post update' : kind === 'residents' ? 'Reply' : kind === 'reported' ? 'Review' : 'Respond';
+  if (onCompose && kind !== 'reported') {
+    return (
+      <button onClick={onCompose} aria-expanded={open} className={button}>
+        {open ? 'Close' : label}
+      </button>
+    );
+  }
   return (
     <button onClick={() => navigate(`/org/issues/${issue.id}`)} className={button}>
       {label}

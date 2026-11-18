@@ -1,9 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Check, ExternalLink, Eye, EyeOff, GitMerge, Search, Send } from 'lucide-react';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ArrowLeft, ExternalLink, Eye, EyeOff, GitMerge, Search, Send } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
-import { CategoryTag, PhotoThumb, SampleBadge, StatusTag, fieldBoxClass, labelClass, linkClass } from '../components/ui';
-import { CATEGORIES, STATUSES, STATUS_ORDER } from '../data/meta';
-import type { Issue, Status } from '../data/types';
+import { CategoryTag, SampleBadge, StatusTag, fieldBoxClass, labelClass, linkClass } from '../components/ui';
+import { CATEGORIES, STATUSES } from '../data/meta';
+import type { Issue, IssueUpdate, Status } from '../data/types';
 import { daysBetween, plural, shortDate, today } from '../lib/format';
 import { useProgressive } from '../lib/useProgressive';
 import { navigate } from '../router';
@@ -13,15 +13,13 @@ import { todoFor, todoHeadline, type TodoItem } from './dashboard';
 import { ForwardToCityForm } from './ForwardToCity';
 import { TABS, cityWait, issueList, tabCount, type TabId } from './issueList';
 import { HideDialog, MergeDialog } from './Moderation';
+import { Photos } from './Photos';
+import { UpdateComposer, pickableStatuses, type ComposeAsk } from './UpdateComposer';
 import { useMediaQuery } from './useMediaQuery';
 
-/** Asks the residents box to scroll into view and take focus, with a status picked if given. `n` makes every ask a new one. */
-interface Compose {
-  status?: Status;
-  n: number;
-}
-
 const button = 'flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium hover:border-slate-300';
+/** The same button at the height of the status picker it sits beside. */
+const quiet = 'flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-sm font-medium hover:border-slate-300';
 
 /** Why the issue is on the to-do list, in the Overview's words, and the action that takes it off. */
 function TodoLine({ todo, onCompose, onHide }: { todo: TodoItem; onCompose: (status?: Status) => void; onHide: () => void }) {
@@ -34,8 +32,9 @@ function TodoLine({ todo, onCompose, onHide }: { todo: TodoItem; onCompose: (sta
         <p className="font-semibold text-brand-dark">
           {title} · <span className="whitespace-nowrap">{wait}</span>
         </p>
-        {/* For an issue nobody has answered the reason is when it was pinned and by how many, which the page already says. */}
-        {todo.kind !== 'new' && <p className="mt-0.5 text-slate-700">{todo.reason}</p>}
+        {/* The reason is left out where the page already says it: when it was pinned and by how many (not answered),
+            or the agency, SR number and dates on the 311 card below (City follow-up). */}
+        {todo.kind !== 'new' && todo.kind !== 'city' && <p className="mt-0.5 text-slate-700">{todo.reason}</p>}
       </div>
       {/* Reports are answered by hiding the pin or keeping it. Residents never see either. */}
       {todo.kind === 'reported' && (
@@ -72,56 +71,125 @@ function TodoLine({ todo, onCompose, onHide }: { todo: TodoItem; onCompose: (sta
 }
 
 /**
+ * One post in the residents' thread: who (and, for staff, which colleague), when, what. A
+ * neighbor's post can be hidden from neighbors, for abuse or personal details, and shown again:
+ * it stays here, struck through, with who hid it.
+ */
+function ThreadPost({ issue, u, canPost }: { issue: Issue; u: IssueUpdate; canPost: boolean }) {
+  const { hideNote, unhideNote, toast } = useStore();
+  const resident = u.role === 'resident';
+  return (
+    <div className={`text-sm ${resident ? 'rounded-lg bg-slate-50 px-3 py-2' : 'border-l-2 border-slate-300 py-0.5 pl-3'}`}>
+      <p className="flex flex-wrap items-baseline gap-x-2">
+        <span className="font-semibold">{u.author}</span>
+        {resident && <span className="text-xs text-slate-500">resident</span>}
+        {/* Who at the office posted it. Residents see only the district. */}
+        {u.staffName && <span className="text-xs text-slate-500">{u.staffName}</span>}
+        <span className="text-xs text-slate-500">{shortDate(u.date)}</span>
+        {resident && canPost && (
+          <button
+            onClick={async () => {
+              if (u.hidden) {
+                if (await unhideNote(issue.id, u.id)) toast('Neighbors can see it again');
+              } else if (await hideNote(issue.id, u.id)) toast('Hidden from neighbors. The person who wrote it still sees it.');
+            }}
+            className={`ml-auto text-xs ${linkClass}`}
+          >
+            {u.hidden ? 'Show again' : 'Hide'}
+          </button>
+        )}
+      </p>
+      {u.hidden ? (
+        <>
+          <p className="text-slate-500 line-through decoration-slate-400">{u.text}</p>
+          <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">
+            <EyeOff className="h-3 w-3" /> Hidden from neighbors{u.hiddenBy ? ` by ${u.hiddenBy}` : ''}
+          </p>
+        </>
+      ) : (
+        <p className="text-slate-700">{u.text}</p>
+      )}
+    </div>
+  );
+}
+
+/** Answering one neighbor's note, under it. It shows under the note on the public page, not as an update. */
+function NoteReply({ issue, noteId, onDone }: { issue: Issue; noteId: string; onDone: () => void }) {
+  const { replyToNote, toast } = useStore();
+  const [text, setText] = useState('');
+  return (
+    <div className="mt-2" onKeyDown={(e) => e.key === 'Escape' && onDone()}>
+      <textarea
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={2}
+        aria-label="Reply to this note"
+        placeholder="Reply to this neighbor. Everyone on the issue page sees it under their note."
+        className="w-full rounded-lg border border-slate-200 bg-white p-3 text-sm"
+      />
+      <div className="mt-1.5 flex items-center justify-end gap-4">
+        <button onClick={onDone} className={`text-sm ${linkClass}`}>
+          Cancel
+        </button>
+        <button
+          disabled={!text.trim()}
+          onClick={async () => {
+            if (await replyToNote(issue.id, noteId, text.trim())) {
+              toast(`Reply posted on ${issue.id}`);
+              onDone();
+            }
+          }}
+          className="rounded-lg bg-brand px-4 py-1.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
+        >
+          Post reply
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Everything on the public page as one thread, oldest first, with the box for the next update
  * at the end, so a reply is written under what it answers. Changing the status goes through
- * here too, so residents always get a line with it.
+ * here too, so residents always get a line with it. Replies sit under the neighbor's note they
+ * answer (one level), and a note can be answered there directly.
  */
-function ResidentsThread({ issue, compose, canPost }: { issue: Issue; compose: Compose | null; canPost: boolean }) {
-  const { postUpdate, toast } = useStore();
-  const [text, setText] = useState('');
-  const [status, setStatus] = useState<Status>(issue.status);
-  const box = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    setText('');
-    setStatus(issue.status);
-  }, [issue.id, issue.status]);
-  useEffect(() => {
-    if (!compose) return;
-    if (compose.status) setStatus(compose.status);
-    box.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    box.current?.focus({ preventScroll: true });
-  }, [compose]);
-
-  const posts = [...issue.updates].sort((a, b) => a.date.localeCompare(b.date));
-  // "Sent to City" needs an SR number, so it comes from the 311 form, not from here.
-  const statuses = STATUS_ORDER.filter((s) => s !== 'sent_to_city' || issue.cityRequest || issue.status === 'sent_to_city');
-  const fixing = status === 'fixed' && issue.status !== 'fixed';
-  const label =
-    status === issue.status
-      ? 'Post update'
-      : fixing
-        ? 'Post and mark fixed'
-        : issue.status === 'fixed'
-          ? 'Post and reopen'
-          : `Post and set to ${STATUSES[status].label}`;
-
+function ResidentsThread({ issue, compose, canPost }: { issue: Issue; compose: ComposeAsk | null; canPost: boolean }) {
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  useEffect(() => setReplyingTo(null), [issue.id]);
+  const byDate = (a: IssueUpdate, b: IssueUpdate) => a.date.localeCompare(b.date);
+  const posts = issue.updates.filter((u) => !u.replyTo).sort(byDate);
   return (
     <section className="rounded-xl border border-slate-200 bg-white">
       <h3 className="px-4 pt-3 font-semibold">Residents</h3>
       {posts.length > 0 ? (
         <ol className="mt-2 space-y-2 px-4">
           {posts.map((u) => {
-            const resident = u.role === 'resident';
+            const replies = issue.updates.filter((r) => r.replyTo === u.id).sort(byDate);
             return (
-              <li key={u.id} className={`text-sm ${resident ? 'rounded-lg bg-slate-50 px-3 py-2' : 'border-l-2 border-slate-300 py-0.5 pl-3'}`}>
-                <p className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="font-semibold">{u.author}</span>
-                  {resident && <span className="text-xs text-slate-500">resident</span>}
-                  {/* Who at the office posted it. Residents see only the district. */}
-                  {u.staffName && <span className="text-xs text-slate-500">{u.staffName}</span>}
-                  <span className="text-xs text-slate-500">{shortDate(u.date)}</span>
-                </p>
-                <p className="text-slate-700">{u.text}</p>
+              <li key={u.id}>
+                <ThreadPost issue={issue} u={u} canPost={canPost} />
+                {replies.length > 0 && (
+                  <ol className="ml-4 mt-2 space-y-2">
+                    {replies.map((r) => (
+                      <li key={r.id}>
+                        <ThreadPost issue={issue} u={r} canPost={canPost} />
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {canPost && u.role === 'resident' && !u.hidden && (
+                  <div className="ml-4">
+                    {replyingTo === u.id ? (
+                      <NoteReply issue={issue} noteId={u.id} onDone={() => setReplyingTo(null)} />
+                    ) : (
+                      <button onClick={() => setReplyingTo(u.id)} className={`mt-1 text-xs ${linkClass}`}>
+                        Reply to this note
+                      </button>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -131,47 +199,7 @@ function ResidentsThread({ issue, compose, canPost }: { issue: Issue; compose: C
       )}
       {canPost ? (
         <div className="mt-3 border-t border-slate-100 p-4">
-          <textarea
-            ref={box}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={3}
-            aria-label="Update for residents"
-            placeholder={
-              fixing
-                ? 'What was done, and by whom? Neighbors will be asked to confirm it’s fixed.'
-                : 'What changed? Residents who +1’d or follow this see it on the issue page and in their updates.'
-            }
-            className="w-full rounded-lg border border-slate-200 p-3 text-sm"
-          />
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-            <label className={`${fieldBoxClass} py-1.5 text-xs text-slate-500`}>
-              Status
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as Status)}
-                className="bg-transparent text-sm font-medium text-ink outline-none"
-              >
-                {statuses.map((s) => (
-                  <option key={s} value={s}>
-                    {STATUSES[s].label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              disabled={!text.trim()}
-              onClick={async () => {
-                if (await postUpdate(issue.id, text.trim(), status)) {
-                  setText('');
-                  toast(fixing ? `${issue.id} marked fixed · neighbors will be asked to confirm` : `Update posted on ${issue.id}`);
-                }
-              }}
-              className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
-            >
-              {label}
-            </button>
-          </div>
+          <UpdateComposer issue={issue} ask={compose} />
         </div>
       ) : (
         <div className="pb-3" />
@@ -329,12 +357,13 @@ function ModerationBanner({ issue }: { issue: Issue }) {
   return null;
 }
 
-function Facts({ issue }: { issue: Issue }) {
+/** `ownerShown`: the owner picker or the 311 card already says who has it, so it isn't listed a second time here. */
+function Facts({ issue, ownerShown }: { issue: Issue; ownerShown: boolean }) {
   const rows: [string, ReactNode, boolean?][] = [
-    ['Owner', issue.owner ?? 'Unassigned'],
+    ...(ownerShown ? [] : [['Owner', issue.owner ?? 'Unassigned'] as [string, ReactNode]]),
     ['Neighbors', `${issue.votes} (+${issue.votesThisWeek} this week)`],
     ['Following', issue.following],
-    ['Duplicates merged', issue.duplicatesMerged],
+    ...(issue.duplicatesMerged > 0 ? [['Duplicates merged', issue.duplicatesMerged] as [string, ReactNode]] : []),
   ];
   if (issue.status === 'fixed' || issue.confirmedFixed > 0 || issue.notFixed > 0) {
     rows.push(['Confirmed fixed', issue.confirmedFixed], ['Say it isn’t fixed', issue.notFixed, issue.notFixed > 0]);
@@ -402,7 +431,7 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
   const store = useStore();
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<'merge' | 'hide' | null>(null);
-  const [compose, setCompose] = useState<Compose | null>(null);
+  const [compose, setCompose] = useState<ComposeAsk | null>(null);
   useEffect(() => {
     setDialog(null);
     setCompose(null);
@@ -444,7 +473,6 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
   // Don't mount the detail (and its map) while it's hidden: Leaflet can't size a map in a hidden box.
   const wide = useMediaQuery('(min-width: 768px)');
   const showDetail = wide || showDetailOnPhone;
-  const age = issue ? daysBetween(issue.createdAt, day) : 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -520,87 +548,107 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
             >
               <ArrowLeft className="h-4 w-4" /> {searching ? 'Results' : activeTab.label}
             </button>
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-4">
-              <div className="min-w-0 flex-1">
+            {/* Capped so lines stay readable and buttons stay next to what they act on. A very wide window gets a third
+                column instead of a blank half: handling on the left, the residents' thread beside it, context on the right. */}
+            <div className="grid max-w-[1040px] grid-cols-1 items-start gap-x-5 gap-y-4 xl:grid-cols-[minmax(0,1fr)_260px] xl:grid-rows-[auto_auto_1fr] 3xl:max-w-[1760px] 3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_300px] 3xl:grid-rows-[auto_1fr]">
+              <div className="min-w-0 xl:col-span-2 3xl:col-span-1">
                 <p className={labelClass}>
                   <span className="font-mono font-normal">{issue.id}</span> · {CATEGORIES[issue.category].label} · {issue.locationLabel}
                 </p>
                 <h2 className="mt-1 text-xl font-bold md:text-2xl">{issue.title}</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  <StatusTag status={issue.status} className="text-ink" /> · Pinned {shortDate(issue.createdAt)}
-                  {/* An issue nobody has answered has waited since it was pinned, and the to-do line says how long. */}
-                  {todo?.kind !== 'new' && ` · ${age === 0 ? 'today' : `${plural(age, 'day')} ago`}`}
-                </p>
-              </div>
-              {!issue.mergedInto && (
-                <div className="flex shrink-0 flex-wrap gap-2">
-                  <button onClick={() => setDialog('merge')} className={button}>
-                    <GitMerge className="h-4 w-4" /> Merge
-                  </button>
-                  {!issue.hidden && (
-                    <button onClick={() => setDialog('hide')} className={button}>
-                      <EyeOff className="h-4 w-4" /> Hide
-                    </button>
+                {/* One row under the title: the state it is in on the left, the rarer actions on the right. */}
+                <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+                  {issue.mergedInto ? (
+                    <StatusTag status={issue.status} />
+                  ) : (
+                    // Picking a status doesn't change it yet: it goes to the box under the thread, where it is
+                    // confirmed, with a note when one is needed. Until then this keeps showing the current one.
+                    <label className={`${fieldBoxClass} h-8 bg-white pl-2.5 pr-1`}>
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: STATUSES[issue.status].color }} />
+                      <select
+                        aria-label="Status"
+                        title="Change the status"
+                        value={issue.status}
+                        onChange={(e) => startCompose(e.target.value as Status)}
+                        // Sized to the status it shows, not to the longest one in the list (where the browser supports it).
+                        className="bg-transparent font-medium text-ink outline-none [field-sizing:content]"
+                      >
+                        {pickableStatuses(issue).map((st) => (
+                          <option key={st} value={st}>
+                            {STATUSES[st].label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   )}
-                  {issue.status !== 'fixed' && (
-                    <button onClick={() => startCompose('fixed')} title="Say what was done; neighbors are then asked to confirm" className={button}>
-                      <Check className="h-4 w-4" /> Mark fixed…
-                    </button>
+                  <span className="text-slate-500">Pinned {shortDate(issue.createdAt)}</span>
+                  {!issue.mergedInto && (
+                    <div className="ml-auto flex gap-2">
+                      <button onClick={() => setDialog('merge')} className={quiet}>
+                        <GitMerge className="h-4 w-4" /> Merge
+                      </button>
+                      {!issue.hidden && (
+                        <button onClick={() => setDialog('hide')} className={quiet}>
+                          <EyeOff className="h-4 w-4" /> Hide
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-            </div>
+              </div>
 
-            <div className="mt-4 grid gap-5 md:mt-5 xl:grid-cols-[1fr_260px]">
-              <div className="min-w-0 space-y-4">
+              <div className="min-w-0 space-y-4 xl:col-start-1 3xl:row-start-2">
                 <ModerationBanner issue={issue} />
                 {todo && <TodoLine todo={todo} onCompose={startCompose} onHide={() => setDialog('hide')} />}
                 {issue.description && <p className="text-[15px] leading-relaxed text-slate-700">{issue.description}</p>}
-                {issue.photos.length > 0 ? (
-                  <div className="grid grid-cols-3 gap-2">
-                    {issue.photos.slice(0, issue.photos.length > 3 ? 2 : 3).map((_, idx) => (
-                      <a key={idx} href={issue.photos[idx]} target="_blank" rel="noreferrer">
-                        <PhotoThumb issue={issue} index={idx} className="h-20 w-full rounded-lg sm:h-24" />
-                      </a>
-                    ))}
-                    {issue.photos.length > 3 && (
-                      <div className="grid h-20 place-items-center rounded-lg border border-slate-200 bg-white text-sm text-slate-500 sm:h-24">
-                        +{issue.photos.length - 2} photos
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-500">No photos with this report.</p>
-                )}
+                <Photos photos={issue.photos} label={issue.id} />
                 {!issue.mergedInto && <CityCard issue={issue} todo={todo} />}
+              </div>
+              <div className="min-w-0 xl:col-start-1 xl:row-start-3 3xl:col-start-2 3xl:row-start-1 3xl:row-span-2">
                 <ResidentsThread issue={issue} compose={compose} canPost={!issue.mergedInto} />
               </div>
 
-              <aside className="min-w-0 space-y-4">
-                <div className="h-40 overflow-hidden rounded-xl border border-slate-200 xl:h-36">
+              <aside className="min-w-0 space-y-4 xl:col-start-2 xl:row-start-2 xl:row-span-2 3xl:col-start-3 3xl:row-start-1 3xl:row-span-2">
+                {/* Where it is, and what else is pinned around it. Tall enough to read the block, closer in than the
+                    staff map, and with the credit line small so it doesn't cover a third of the picture. */}
+                <div className="h-56 overflow-hidden rounded-xl border border-slate-200 xl:h-64 3xl:h-80 [&_.leaflet-control-attribution]:text-[10px] [&_.leaflet-control-attribution]:leading-[1.5]">
                   <IssueMap
                     issues={[...store.issues.filter((i) => i.status !== 'fixed' && i.id !== issue.id), issue]}
                     selectedId={issue.id}
                     center={{ lat: issue.lat, lng: issue.lng }}
-                    zoom={15}
+                    zoom={16}
                     onSelect={(i) => navigate(linkFor(i.id))}
                   />
                 </div>
-                <Facts issue={issue} />
-                <div>
-                  <h3 className={`${labelClass} mb-2`}>Activity</h3>
-                  <ol className="space-y-1.5 text-sm">
-                    {[...issue.history].reverse().map((h, idx) => (
-                      <li key={idx} className="flex gap-3">
-                        <span className="w-12 shrink-0 text-slate-500">{shortDate(h.date)}</span>
-                        <span>
-                          {h.text}
-                          {h.staffName && <span className="text-slate-500"> · {h.staffName}</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
+                {/* The full map has the filters; this opens it on this issue. Hidden and merged issues aren't on it. */}
+                {!issue.hidden && !issue.mergedInto && (
+                  <a href={`#/org/map?issue=${issue.id}`} className={`${linkClass} -mt-2 inline-block text-sm`}>
+                    Open on the map
+                  </a>
+                )}
+                <Facts
+                  issue={issue}
+                  ownerShown={
+                    (!issue.mergedInto && !issue.cityRequest && !issue.agency) ||
+                    Boolean(issue.cityRequest && issue.owner === issue.cityRequest.agency)
+                  }
+                />
+                {issue.history.length > 1 && (
+                  <div>
+                    <h3 className={`${labelClass} mb-2`}>Activity</h3>
+                    <ol className="space-y-1.5 text-sm">
+                      {[...issue.history].reverse().map((h, idx) => (
+                        <li key={idx} className="flex gap-3">
+                          <span className="w-12 shrink-0 text-slate-500">{shortDate(h.date)}</span>
+                          <span>
+                            {h.text}
+                            {h.staffName && <span className="text-slate-500"> · {h.staffName}</span>}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
                 <a href={`#/i/${issue.id}`} className={`${linkClass} inline-block text-sm`}>
                   View resident page
                 </a>

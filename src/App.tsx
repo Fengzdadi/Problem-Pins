@@ -231,7 +231,7 @@ export default function App() {
         page = <Issues selectedId={seg[2]} tab="city" />;
         break;
       case 'map':
-        page = <OrgMap />;
+        page = <OrgMap issueId={query.get('issue')} />;
         break;
       case 'reports':
         page = <Reports month={query.get('month')} />;

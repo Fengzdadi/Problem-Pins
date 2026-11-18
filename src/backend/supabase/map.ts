@@ -41,6 +41,12 @@ interface UpdateRow {
   mine: boolean;
   /** null unless the caller is staff */
   staff_name?: string | null;
+  /** The note this answers; missing before the note_replies migration. */
+  reply_to?: string | null;
+  /** Hidden by staff. Its text is empty unless the caller is staff or wrote it. */
+  hidden?: boolean;
+  /** null unless the caller is staff */
+  hidden_by?: string | null;
 }
 
 interface HistoryRow {
@@ -154,6 +160,9 @@ function mapUpdate(row: UpdateRow, districtName: string): IssueUpdate {
     date: nyDate(row.created_at),
     ...(row.mine ? { mine: true } : {}),
     ...(row.staff_name ? { staffName: row.staff_name } : {}),
+    ...(row.reply_to ? { replyTo: row.reply_to } : {}),
+    ...(row.hidden ? { hidden: true } : {}),
+    ...(row.hidden_by ? { hiddenBy: row.hidden_by } : {}),
   };
 }
 

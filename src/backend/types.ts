@@ -58,8 +58,9 @@ export interface Backend {
   follow(issueId: string, contact?: FollowContact): Promise<void>;
   /** Stops following and forgets any contact this device left for the issue. */
   unfollow(issueId: string): Promise<void>;
-  comment(issueId: string, text: string): Promise<void>;
-  /** Deletes a note this device wrote (`mine`). */
+  /** A note, or with `replyTo` a reply under a neighbor's note (one level: a reply's own id answers its note). */
+  comment(issueId: string, text: string, replyTo?: string): Promise<void>;
+  /** Deletes a note this device wrote (`mine`), and the replies under it. */
   deleteNote(issueId: string, noteId: string): Promise<void>;
   confirmFix(issueId: string, answer: 'yes' | 'no'): Promise<void>;
   /**
@@ -93,6 +94,11 @@ export interface Backend {
 
   // ---- Staff ----
   postUpdate(issueId: string, text: string, status?: Status): Promise<void>;
+  /** The district answers a neighbor's note, under it. Not an update: the status card keeps the last one. */
+  replyToNote(issueId: string, noteId: string, text: string): Promise<void>;
+  /** Hides a neighbor's note or reply from neighbors (`hidden`), or shows it again. */
+  hideNote(issueId: string, noteId: string): Promise<void>;
+  unhideNote(issueId: string, noteId: string): Promise<void>;
   setStatus(issueId: string, status: Status): Promise<void>;
   assign(issueId: string, owner: string | null): Promise<void>;
   /** Records a 311 request staff filed. `request` is required in live mode (the real SR number). */

@@ -173,7 +173,7 @@ describe('DemoBackend', () => {
     await backend.unfollow('PP-2402');
     expect((await find('PP-2402')).following).toBe(before);
     expect((await backend.load()).me.following).not.toContain('PP-2402');
-    expect(storage.getItem('problem-pins-demo-v5')).not.toContain('resident@example.org');
+    expect(storage.getItem('problem-pins-demo-v7')).not.toContain('resident@example.org');
   });
 
   it('deletes only your own notes', async () => {
@@ -183,6 +183,42 @@ describe('DemoBackend', () => {
     expect((await find('PP-2440')).updates.some((u) => u.id === note.id)).toBe(false);
     const someoneElse = (await find('PP-2402')).updates.find((u) => u.role === 'resident')!;
     await expect(backend.deleteNote('PP-2402', someoneElse.id)).rejects.toThrow('Only the phone that wrote a note can delete it.');
+  });
+
+  it('keeps replies one level deep, and deletes them with their note', async () => {
+    await backend.comment('PP-2440', 'Same on my block');
+    const note = (await find('PP-2440')).updates.at(-1)!;
+    await backend.replyToNote('PP-2440', note.id, 'We asked the shop to start later');
+    const answer = (await find('PP-2440')).updates.at(-1)!;
+    expect(answer).toMatchObject({ role: 'partner', replyTo: note.id });
+    // A reply to a reply goes under the same note.
+    await backend.comment('PP-2440', 'Thanks!', answer.id);
+    expect((await find('PP-2440')).updates.at(-1)).toMatchObject({ role: 'resident', replyTo: note.id, mine: true });
+    // A district update isn't a note: there is nothing to reply under.
+    const update = (await find('PP-2402')).updates.find((u) => u.role === 'partner' && !u.replyTo)!;
+    await expect(backend.comment('PP-2402', 'Hi', update.id)).rejects.toThrow('That note was deleted.');
+
+    await backend.deleteNote('PP-2440', note.id);
+    expect((await find('PP-2440')).updates.some((u) => u.id === note.id || u.replyTo === note.id)).toBe(false);
+  });
+
+  it('lets staff hide a neighbor’s note and show it again', async () => {
+    const note = (await find('PP-2402')).updates.find((u) => u.role === 'resident')!;
+    await backend.hideNote('PP-2402', note.id);
+    expect((await find('PP-2402')).updates.find((u) => u.id === note.id)).toMatchObject({ hidden: true, hiddenBy: 'Maya Ruiz' });
+    await expect(backend.comment('PP-2402', 'Me too', note.id)).rejects.toThrow('hid that note');
+    const update = (await find('PP-2402')).updates.find((u) => u.role === 'partner')!;
+    await expect(backend.hideNote('PP-2402', update.id)).rejects.toThrow('That note was deleted.');
+
+    // Neighbors get the row without its words or who hid it.
+    await backend.signOut();
+    expect((await find('PP-2402')).updates.find((u) => u.id === note.id)).toMatchObject({ hidden: true, text: '' });
+    expect((await find('PP-2402')).updates.find((u) => u.id === note.id)!.hiddenBy).toBeUndefined();
+    await expect(backend.unhideNote('PP-2402', note.id)).rejects.toThrow();
+
+    await backend.signIn('maya@example.org', 'x');
+    await backend.unhideNote('PP-2402', note.id);
+    expect((await find('PP-2402')).updates.find((u) => u.id === note.id)!.hidden).toBeUndefined();
   });
 
   it('lets the device that pinned it remove its pin until neighbors +1 it or the office acts', async () => {
@@ -201,9 +237,9 @@ describe('DemoBackend', () => {
 
     // The demo has one device, so a second +1 stands in for a neighbor's.
     const popular = await backend.createIssue(draft);
-    const state = JSON.parse(storage.getItem('problem-pins-demo-v5')!);
+    const state = JSON.parse(storage.getItem('problem-pins-demo-v7')!);
     state.issues.find((i: { id: string }) => i.id === popular).votes = 2;
-    storage.setItem('problem-pins-demo-v5', JSON.stringify(state));
+    storage.setItem('problem-pins-demo-v7', JSON.stringify(state));
     await expect(new DemoBackend(storage).removeIssue(popular)).rejects.toThrow('Neighbors have +1’d this');
   });
 

@@ -61,7 +61,7 @@ export const SAMPLE_ISSUES: Issue[] = [
       },
       {
         id: 'u2',
-        author: 'Priya S.',
+        author: 'Neighbor',
         role: 'resident',
         text: "Walked my kid home this way last night. It's pitch black between the two posts.",
         date: '2026-10-12',
@@ -128,7 +128,7 @@ export const SAMPLE_ISSUES: Issue[] = [
     updates: [
       {
         id: 'u4',
-        author: 'Marcus T.',
+        author: 'Neighbor',
         role: 'resident',
         text: 'Started at 6:10 this morning again. Three blowers at once.',
         date: '2026-10-13',
@@ -305,10 +305,18 @@ export const SAMPLE_ISSUES: Issue[] = [
     updates: [
       {
         id: 'u5',
-        author: 'Dana K.',
+        author: 'Neighbor',
         role: 'resident',
         text: "Thanks for getting the bench by the fountain fixed so fast. First time I've seen a report actually go somewhere.",
         date: '2026-09-19',
+      },
+      {
+        id: 'u6',
+        author: 'West Side District',
+        role: 'partner',
+        text: 'Thank you for pinning it. Every pin gets a look from our office, so keep them coming.',
+        date: '2026-09-22',
+        replyTo: 'u5',
       },
     ],
   }),

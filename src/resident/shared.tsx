@@ -14,6 +14,29 @@ export function residentHistory(history: HistoryEvent[]) {
   return history.filter((h) => !h.staffOnly && !/^(Assigned to |Unassigned$)/.test(h.text));
 }
 
+/**
+ * A line of short facts joined by dots ("In review · 30 m away · pinned Oct 3"). Each fact stays in
+ * one piece, so a line that is too long breaks between facts, never inside one. Every fact carries
+ * its dot in front; the row is shifted left by one dot and clipped, so a line never starts or ends
+ * with a stray dot. Empty facts are skipped.
+ */
+export function Facts({ parts, className = '' }: { parts: ReactNode[]; className?: string }) {
+  const shown = parts.filter((p) => p !== null && p !== undefined && p !== false && p !== '');
+  return (
+    <div className={`overflow-hidden ${className}`}>
+      <p className="-ml-4 flex flex-wrap items-baseline">
+        {shown.map((part, i) => (
+          <span key={i} className="max-w-full before:inline-block before:w-4 before:text-center before:content-['·']">
+            {part}
+          </span>
+        ))}
+      </p>
+    </div>
+  );
+}
+
+/** A section heading on a resident page: sentence case, darker and larger than a label. */
+export const HEADING = 'text-base font-semibold text-ink';
 /** A section label: sentence case, never mono or capitals. */
 export const LABEL = 'text-xs font-medium text-slate-500';
 /** A plain text link. Orange is kept for the one thing to act on. */

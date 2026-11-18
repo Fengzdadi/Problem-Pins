@@ -22,7 +22,6 @@ interface Props {
   zoom?: number;
   sizeByVotes?: boolean;
   voteLabelsAbove?: number;
-  heat?: boolean;
   /** Draws the resident's dot at `you`. Nothing is drawn while the position is unknown. */
   showYou?: boolean;
   /** The resident's position; `accuracy` (meters) draws a faint circle when it's wide enough to matter. */
@@ -32,6 +31,12 @@ interface Props {
   onPick?: (p: LatLng) => void;
   /** Change it to fly to `center` again even if `center` is unchanged (e.g. a "locate me" tap). */
   centerKey?: string | number;
+  /**
+   * Open on the whole district (its boundary, or the issues when it has none) instead of a fixed zoom,
+   * keeping it clear of panels drawn over the map: `[left, top]` and `[right, bottom]` in pixels.
+   * Ignored when `center` is given.
+   */
+  fit?: { topLeft: [number, number]; bottomRight: [number, number] };
   /** Outline the district and dim what's outside it. On by default when the district has a boundary. */
   showBoundary?: boolean;
   /** +/- buttons, in the top left unless `zoomPosition` says otherwise. */
@@ -93,17 +98,6 @@ const IssueMarker = memo(function IssueMarker({
   );
 });
 
-const HeatCircle = memo(function HeatCircle({ issue, onSelect }: { issue: Issue; onSelect: (issue: Issue) => void }) {
-  return (
-    <Circle
-      center={[issue.lat, issue.lng]}
-      radius={30 + issue.votes * 1.4}
-      pathOptions={{ stroke: false, fillColor: '#ef5a1f', fillOpacity: 0.12 }}
-      eventHandlers={{ click: () => onSelect(issue) }}
-    />
-  );
-});
-
 function FlyTo({ center, zoom, centerKey }: { center?: LatLng; zoom?: number; centerKey?: string | number }) {
   const map = useMap();
   useEffect(() => {
@@ -115,6 +109,17 @@ function FlyTo({ center, zoom, centerKey }: { center?: LatLng; zoom?: number; ce
     if (box.clientWidth && box.clientHeight) map.flyTo(target, z, { duration: 0.6 });
     else map.setView(target, z, { animate: false });
   }, [center?.lat, center?.lng, centerKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+/** Once, when the map opens: frame the district, so it fills the window whatever the window's size. */
+function FitDistrict({ points, fit }: { points: [number, number][]; fit: NonNullable<Props['fit']> }) {
+  const map = useMap();
+  useEffect(() => {
+    const box = map.getContainer();
+    if (!points.length || !box.clientWidth || !box.clientHeight) return;
+    map.fitBounds(L.latLngBounds(points), { paddingTopLeft: fit.topLeft, paddingBottomRight: fit.bottomRight, animate: false });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return null;
 }
 
@@ -193,12 +198,12 @@ export default function IssueMap({
   zoom = 16,
   sizeByVotes = true,
   voteLabelsAbove,
-  heat = false,
   showYou = false,
   you,
   pick,
   onPick,
   centerKey,
+  fit,
   showBoundary = true,
   zoomControl = false,
   zoomPosition = 'topleft',
@@ -216,6 +221,8 @@ export default function IssueMap({
     <MapContainer
       center={[start.lat, start.lng]}
       zoom={zoom}
+      // Framing the district rarely lands on a whole zoom level; quarter steps let it fill the window.
+      zoomSnap={fit ? 0.25 : 1}
       zoomControl={false}
       attributionControl
       dragging={interactive}
@@ -230,11 +237,19 @@ export default function IssueMap({
       {/* A child rather than MapContainer's zoomControl option, which is read only once, when the map is made. */}
       {zoomControl && <ZoomControl position={zoomPosition} />}
       <FlyTo center={center} zoom={zoom} centerKey={centerKey} />
+      {fit && !center && (
+        <FitDistrict
+          fit={fit}
+          points={
+            district.boundary
+              ? boundaryLatLngs(district.boundary).flatMap((rings) => rings[0])
+              : issues.map((i) => [i.lat, i.lng] as [number, number])
+          }
+        />
+      )}
       {onPick && <ClickToPick onPick={onPick} />}
       {onPick && interactive && <WheelScrollsPage />}
       {showBoundary && district.boundary && <Boundary boundary={district.boundary} />}
-
-      {heat && ordered.map((issue) => <HeatCircle key={`heat-${issue.id}`} issue={issue} onSelect={select} />)}
 
       {ordered.map((issue) => {
         const selected = issue.id === selectedId;

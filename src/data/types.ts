@@ -22,6 +22,19 @@ export interface IssueUpdate {
   mine?: boolean;
   /** The staff member who posted a district update. Only staff receive it; residents see the district. */
   staffName?: string;
+  /**
+   * A reply: the id of the neighbor's note it answers. One level only, so a reply to a reply
+   * answers the same note. A district reply is not a district update: it isn't the latest word on
+   * the status card, only an answer under the note.
+   */
+  replyTo?: string;
+  /**
+   * Hidden by the district office (a neighbor's note or reply). Neighbors don't see it; its text
+   * reaches only staff and the device that wrote it. Staff can show it again.
+   */
+  hidden?: boolean;
+  /** The staff member who hid it. Only staff receive it. */
+  hiddenBy?: string;
 }
 
 export interface HistoryEvent {

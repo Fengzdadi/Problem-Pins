@@ -27,10 +27,11 @@ import type { Backend, NewIssueDraft, Snapshot, SnapshotChanges } from './types'
  * and (once "signed in") West Side District staff. Two tabs stay in sync via `storage` events.
  */
 
-// v5: residents can report pins (`reports`, `me.reported`); older saves have neither, so they start
-// over from the sample. (v4: the sample became a district office, no BID crew or BID noticeboard.
+// v7: notes can have replies (`replyTo`), and the sample has one from the district. Older saves
+// start over from the sample. (v6: sample notes are signed "Neighbor", as in live mode. v5: residents can report pins
+// (`reports`, `me.reported`). v4: the sample became a district office, no BID crew or BID noticeboard.
 // v3: issues gained `notFixed`.)
-export const DEMO_STORAGE_KEY = 'problem-pins-demo-v5';
+export const DEMO_STORAGE_KEY = 'problem-pins-demo-v7';
 const MAX_EVENTS = 2000;
 /** How many earlier snapshots `loadChanges` can answer from; older cursors get a whole snapshot. */
 const KEPT_CURSORS = 8;
@@ -104,6 +105,15 @@ function initialState(): DemoState {
   };
 }
 
+/** The neighbor's note a reply goes under: the note itself, or the note a reply answers. */
+function noteRoot(issue: Issue, id: string) {
+  const target = issue.updates.find((u) => u.id === id);
+  const root = target?.replyTo ?? (target?.role === 'resident' ? target.id : undefined);
+  if (!root) throw new Error('That note was deleted.');
+  if (issue.updates.find((u) => u.id === root)?.hidden) throw new Error('The district office hid that note, so it can’t take replies.');
+  return root;
+}
+
 function emptyMe(): MyState {
   return { voted: [], following: [], confirmed: {}, reported: [] };
 }
@@ -114,7 +124,12 @@ function stripStaffOnly(issue: Issue) {
   if (issue.cityRequest) delete issue.cityRequest.sentBy;
   issue.history = issue.history.filter((h) => !h.staffOnly);
   for (const h of issue.history) delete h.staffName;
-  for (const u of issue.updates) delete u.staffName;
+  for (const u of issue.updates) {
+    delete u.staffName;
+    delete u.hiddenBy;
+    // A hidden note's words reach only the device that wrote it (and staff).
+    if (u.hidden && !u.mine) u.text = '';
+  }
 }
 
 async function blobToDataUrl(blob: Blob) {
@@ -345,10 +360,19 @@ export class DemoBackend implements Backend {
     });
   }
 
-  async comment(issueId: string, text: string) {
+  async comment(issueId: string, text: string, replyTo?: string) {
     const issue = this.issue(issueId);
+    const root = replyTo ? noteRoot(issue, replyTo) : undefined;
     this.mutate(() => {
-      issue.updates.push({ id: crypto.randomUUID(), author: 'You', role: 'resident', text, date: DEMO_TODAY, mine: true });
+      issue.updates.push({
+        id: crypto.randomUUID(),
+        author: 'You',
+        role: 'resident',
+        text,
+        date: DEMO_TODAY,
+        mine: true,
+        ...(root ? { replyTo: root } : {}),
+      });
     });
   }
 
@@ -358,7 +382,8 @@ export class DemoBackend implements Backend {
       throw new Error('Only the phone that wrote a note can delete it.');
     }
     this.mutate(() => {
-      issue.updates = issue.updates.filter((u) => u.id !== noteId);
+      // Its replies go with it, as in the database (on delete cascade).
+      issue.updates = issue.updates.filter((u) => u.id !== noteId && u.replyTo !== noteId);
     });
   }
 
@@ -516,6 +541,40 @@ export class DemoBackend implements Backend {
       }
       issue.updates.push(this.partnerUpdate(text));
     });
+  }
+
+  async replyToNote(issueId: string, noteId: string, text: string) {
+    this.requireStaff();
+    const issue = this.issue(issueId);
+    const root = noteRoot(issue, noteId);
+    this.mutate(() => {
+      issue.updates.push({ ...this.partnerUpdate(text), replyTo: root });
+    });
+  }
+
+  async hideNote(issueId: string, noteId: string) {
+    this.requireStaff();
+    const note = this.neighborNote(issueId, noteId);
+    this.mutate(() => {
+      note.hidden = true;
+      note.hiddenBy = DEMO_STAFF.name;
+    });
+  }
+
+  async unhideNote(issueId: string, noteId: string) {
+    this.requireStaff();
+    const note = this.neighborNote(issueId, noteId);
+    this.mutate(() => {
+      delete note.hidden;
+      delete note.hiddenBy;
+    });
+  }
+
+  /** A neighbor's note or reply, the only posts staff can hide. */
+  private neighborNote(issueId: string, noteId: string) {
+    const note = this.issue(issueId).updates.find((u) => u.id === noteId && u.role === 'resident');
+    if (!note) throw new Error('That note was deleted.');
+    return note;
   }
 
   async setStatus(issueId: string, status: Status) {

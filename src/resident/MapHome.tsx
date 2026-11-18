@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Bell, ChevronUp, LocateFixed, LocateOff, MapPin, Plus, Search, Share, X } from 'lucide-react';
+import { Check, LocateFixed, LocateOff, MapPin, Plus, Search, Share, UserRound, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { PhotoThumb, StatusTag } from '../components/ui';
 import { config, residentAccounts } from '../config';
@@ -13,22 +13,27 @@ import { useProgressive } from '../lib/useProgressive';
 import { useUserLocation } from '../lib/userLocation';
 import { navigate } from '../router';
 import { useStore } from '../store';
-import { BUTTON, CategoryLabel, LABEL, LINK, shareIssue } from './shared';
+import { buildFeed, followedIssues, isNew, lastSeen } from './feed';
+import { BUTTON, CategoryLabel, Facts, LABEL, LINK, shareIssue } from './shared';
 
 export function VoteBox({ issue, done, onVote }: { issue: Issue; done: boolean; onVote: (id: string) => void }) {
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
-        onVote(issue.id);
+        // Already +1’d: open the problem, where the +1 can be taken back. Not here: a stray tap
+        // while scrolling would undo it.
+        if (done) navigate(`/i/${issue.id}`);
+        else onVote(issue.id);
       }}
-      aria-label={done ? 'You +1’d this' : '+1 this problem'}
+      aria-label={done ? 'You +1’d this. Open it to take your +1 back' : '+1 this problem'}
       className={`flex w-11 shrink-0 flex-col items-center rounded-lg border py-1.5 text-sm font-semibold transition ${
         done ? 'border-brand text-brand' : 'border-slate-200 text-ink hover:border-brand hover:text-brand'
       }`}
     >
-      <ChevronUp className="h-4 w-4" strokeWidth={2.5} />
-      {issue.votes}
+      {/* "+1" says what a tap does; a chevron alone read as a score. */}
+      {done ? <Check className="h-4 w-4" strokeWidth={2.5} /> : <span className="text-[13px] font-bold leading-4">+1</span>}
+      <span className={done ? '' : 'font-medium text-slate-600'}>{issue.votes}</span>
     </button>
   );
 }
@@ -50,14 +55,17 @@ const OpenRow = memo(function OpenRow({
     <li onClick={() => navigate(`/i/${issue.id}`)} className="flex cursor-pointer items-center gap-3 border-t border-slate-100 py-3">
       <VoteBox issue={issue} done={done} onVote={onVote} />
       <div className="min-w-0 flex-1">
-        <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
+        <a href={`#/i/${issue.id}`} className="block text-balance font-semibold leading-snug">
           {issue.title}
         </a>
-        <p className="mt-0.5 text-[13px] text-slate-500">
-          <StatusTag status={issue.status} resident className="text-slate-600" /> ·{' '}
-          {meters !== null && meters >= 10 && <>{formatMeters(meters)} away · </>}
-          <span className="whitespace-nowrap">pinned {shortDate(issue.createdAt)}</span>
-        </p>
+        <Facts
+          className="mt-0.5 text-[13px] text-slate-500"
+          parts={[
+            <StatusTag status={issue.status} resident className="text-slate-600" />,
+            meters !== null && meters >= 10 && `${formatMeters(meters)} away`,
+            `pinned ${shortDate(issue.createdAt)}`,
+          ]}
+        />
       </div>
       {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-12 w-12 shrink-0 rounded-lg" />}
     </li>
@@ -67,7 +75,7 @@ const OpenRow = memo(function OpenRow({
 const FixedRow = memo(function FixedRow({ issue }: { issue: Issue }) {
   return (
     <li onClick={() => navigate(`/i/${issue.id}`)} className="cursor-pointer border-t border-slate-100 py-3">
-      <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
+      <a href={`#/i/${issue.id}`} className="block text-balance font-semibold leading-snug">
         {issue.title}
       </a>
       <p className="mt-0.5 text-[13px] text-slate-500">
@@ -173,7 +181,13 @@ export default function MapHome({ focus }: { focus?: string | null }) {
   const flyTo = target ?? (focused ? { lat: focused.lat, lng: focused.lng } : undefined);
   const showDropdown = searching && query.trim().length > 0;
   const issueMatches = showDropdown ? ranked.slice(0, 3) : [];
-  // Same set as the confirm cards on "Your updates": fixed problems this device +1’d or follows.
+  // A dot on the You button: a fix to confirm, or an update since the resident last looked.
+  const hasNewUpdate = useMemo(() => {
+    const feed = buildFeed(followedIssues(issues, voted, following), district.name);
+    const seen = lastSeen(feed);
+    return feed.some((f) => isNew(f, seen));
+  }, [issues, voted, following, district.name]);
+  // Same set as the confirm cards on the You page: fixed problems this device +1’d or follows.
   const hasPendingConfirm = issues.some(
     (i) => i.status === 'fixed' && (voted.includes(i.id) || following.includes(i.id)) && !confirmed[i.id],
   );
@@ -230,10 +244,10 @@ export default function MapHome({ focus }: { focus?: string | null }) {
           <button
             onClick={() => navigate('/updates')}
             className="relative grid h-11 w-11 place-items-center rounded-xl border border-slate-200 bg-white shadow-sm"
-            aria-label="Your updates"
+            aria-label={hasPendingConfirm || hasNewUpdate ? 'You, something new' : 'You'}
           >
-            <Bell className="h-5 w-5" />
-            {hasPendingConfirm && <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-brand" />}
+            <UserRound className="h-5 w-5" />
+            {(hasPendingConfirm || hasNewUpdate) && <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full border-2 border-white bg-brand" />}
           </button>
         </div>
         {showDropdown && (
@@ -335,7 +349,7 @@ export default function MapHome({ focus }: { focus?: string | null }) {
             <div className="flex items-start justify-between gap-2">
               <p>
                 <span className="font-semibold">Your pin is live.</span> Neighbors can +1 it now.
-                {!config.notifications && (account ? ' It’s saved to your account.' : ' It stays under Your updates on this phone.')}
+                {!config.notifications && (account ? ' It’s saved to your account.' : ' Its updates show under You.')}
                 {residentAccounts && !account && (
                   <>
                     {' '}
@@ -365,14 +379,16 @@ export default function MapHome({ focus }: { focus?: string | null }) {
             <h2 className="text-lg font-semibold">{plural(ranked.length, 'open problem')}</h2>
             <div className="flex gap-3">
               <button className={sortTab(sort === 'votes')} aria-pressed={sort === 'votes'} onClick={() => setSort('votes')}>
-                Most +1’d
+                Most +1s
               </button>
               <button className={sortTab(sort === 'newest')} aria-pressed={sort === 'newest'} onClick={() => setSort('newest')}>
                 Newest
               </button>
             </div>
           </div>
-          <p className="mt-0.5 text-[13px] text-slate-500">
+          {/* The first screen many residents see: say once what +1 means. */}
+          <p className="mt-0.5 text-[13px] leading-snug text-slate-500">
+            <span className="block">+1 a problem if you have it too.</span>
             Pins go to {district.name} ·{' '}
             <a href="#/about" className={LINK}>
               About

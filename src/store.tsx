@@ -50,7 +50,8 @@ interface Store {
   unfollow: (id: string) => Promise<boolean>;
   /** Uploads the photos, creates the issue and resolves to its new ID (null on failure). */
   addIssue: (draft: Omit<NewIssueDraft, 'photos'>, photos?: Blob[]) => Promise<string | null>;
-  addComment: (id: string, text: string) => Promise<boolean>;
+  /** With `replyTo`, a reply under a neighbor's note. */
+  addComment: (id: string, text: string, replyTo?: string) => Promise<boolean>;
   deleteNote: (id: string, noteId: string) => Promise<boolean>;
   confirmFix: (id: string, answer: 'yes' | 'no') => Promise<boolean>;
   removeIssue: (id: string) => Promise<boolean>;
@@ -64,6 +65,9 @@ interface Store {
 
   // staff
   postUpdate: (id: string, text: string, status?: Status) => Promise<boolean>;
+  replyToNote: (id: string, noteId: string, text: string) => Promise<boolean>;
+  hideNote: (id: string, noteId: string) => Promise<boolean>;
+  unhideNote: (id: string, noteId: string) => Promise<boolean>;
   setStatus: (id: string, status: Status) => Promise<boolean>;
   assign: (id: string, owner: string | null) => Promise<boolean>;
   sendToCity: (id: string, request?: CityRequestInput) => Promise<boolean>;
@@ -284,7 +288,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       },
 
-      addComment: (id, text) => run(() => b.comment(id, text), { name: 'comment', issueId: id }),
+      addComment: (id, text, replyTo) =>
+        run(() => b.comment(id, text, replyTo), { name: 'comment', issueId: id, props: replyTo ? { reply: true } : undefined }),
       deleteNote: (id, noteId) => run(() => b.deleteNote(id, noteId)),
       confirmFix: (id, answer) => run(() => b.confirmFix(id, answer), { name: 'confirm_fix', issueId: id, props: { answer } }),
       removeIssue: (id) => run(() => b.removeIssue(id)),
@@ -312,6 +317,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       postUpdate: (id, text, status) =>
         run(() => b.postUpdate(id, text, status), { name: 'staff_update', issueId: id, props: status ? { status } : undefined }),
+      replyToNote: (id, noteId, text) =>
+        run(() => b.replyToNote(id, noteId, text), { name: 'staff_update', issueId: id, props: { reply: true } }),
+      hideNote: (id, noteId) => run(() => b.hideNote(id, noteId), { name: 'staff_hide', issueId: id, props: { note: true } }),
+      unhideNote: (id, noteId) => run(() => b.unhideNote(id, noteId)),
       setStatus: (id, status) => run(() => b.setStatus(id, status), { name: 'staff_status', issueId: id, props: { status } }),
       assign: (id, owner) => run(() => b.assign(id, owner), { name: 'staff_assign', issueId: id, props: { assigned: Boolean(owner) } }),
       sendToCity: (id, request) => run(() => b.sendToCity(id, request), { name: 'staff_send_to_city', issueId: id }),

@@ -37,7 +37,7 @@ export default function About() {
         their location data removed before they are uploaded. Your +1s and the problems you follow are remembered on this phone, in
         this browser, so they show under{' '}
         <a href="#/updates" className={LINK}>
-          Your updates
+          You
         </a>{' '}
         here
         {residentAccounts ? (

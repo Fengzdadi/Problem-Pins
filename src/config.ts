@@ -33,7 +33,7 @@ export const config = {
    * Whether following a problem really sends a text or email. Nothing sends them yet
    * (docs/BACKEND.md, wave 2), so this is off unless a deployment says otherwise. While it is
    * off, resident screens must not ask for a phone or email or promise a message: a follow is
-   * kept on the device and shows under "Your updates".
+   * kept on the device and shows on the You page.
    */
   notifications: env.VITE_NOTIFICATIONS === 'on',
   /**

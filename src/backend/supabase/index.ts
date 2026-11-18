@@ -299,8 +299,9 @@ export function createSupabaseBackend(config: SupabaseConfig, options: SupabaseB
 
     unfollow: onIssue('unfollow'),
 
-    async comment(issueId: string, text: string) {
-      await call('comment', { p_issue: issueId, p_text: text });
+    async comment(issueId: string, text: string, replyTo?: string) {
+      // Without a reply, the same call as before the note_replies migration.
+      await call('comment', { p_issue: issueId, p_text: text, ...(replyTo ? { p_reply_to: replyTo } : {}) });
     },
 
     async deleteNote(issueId: string, noteId: string) {
@@ -321,6 +322,18 @@ export function createSupabaseBackend(config: SupabaseConfig, options: SupabaseB
 
     async postUpdate(issueId: string, text: string, status?: Status) {
       await call('post_update', { p_issue: issueId, p_text: text, p_status: status ?? null });
+    },
+
+    async replyToNote(issueId: string, noteId: string, text: string) {
+      await call('reply_to_note', { p_issue: issueId, p_note: noteId, p_text: text });
+    },
+
+    async hideNote(issueId: string, noteId: string) {
+      await call('hide_note', { p_issue: issueId, p_note: noteId });
+    },
+
+    async unhideNote(issueId: string, noteId: string) {
+      await call('unhide_note', { p_issue: issueId, p_note: noteId });
     },
 
     async setStatus(issueId: string, status: Status) {

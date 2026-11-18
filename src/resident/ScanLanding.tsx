@@ -6,7 +6,7 @@ import { distanceMeters } from '../data/geo';
 import { formatMeters, plural, shortDate } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
-import { BUTTON, CategoryLabel, FixQuestion, LABEL, LINK } from './shared';
+import { BUTTON, CategoryLabel, Facts, FixQuestion, LABEL, LINK } from './shared';
 
 /** How close an open problem must be to show as "nearby" when the poster has no linked problem. */
 const NEARBY_METERS = 150;
@@ -85,7 +85,7 @@ export default function ScanLanding({ code, source }: { code: string; source: st
         <div className="mt-5 rounded-xl border border-slate-200 p-4">
           <p className={LABEL}>Reported here</p>
           <div className="mt-2 flex gap-3">
-            <p className="flex-1 text-lg font-semibold leading-snug">{issue.title}</p>
+            <p className="flex-1 text-balance text-lg font-semibold leading-snug">{issue.title}</p>
             {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />}
           </div>
           <p className="mt-2 text-sm text-slate-500">
@@ -104,13 +104,17 @@ export default function ScanLanding({ code, source }: { code: string; source: st
         <div className="mt-5 rounded-xl border border-slate-200 p-4">
           <p className={LABEL}>Already reported here</p>
           <div className="mt-2 flex gap-3">
-            <p className="flex-1 text-lg font-semibold leading-snug">{issue.title}</p>
+            <p className="flex-1 text-balance text-lg font-semibold leading-snug">{issue.title}</p>
             {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-14 w-14 shrink-0 rounded-lg" />}
           </div>
-          <p className="mt-2 text-[13px] text-slate-500">
-            <StatusTag status={issue.status} resident className="text-ink" /> · {plural(issue.votes, 'neighbor')} ·{' '}
-            <span className="whitespace-nowrap">pinned {shortDate(issue.createdAt)}</span>
-          </p>
+          <Facts
+            className="mt-2 text-[13px] text-slate-500"
+            parts={[
+              <StatusTag status={issue.status} resident className="text-ink" />,
+              plural(issue.votes, 'neighbor'),
+              `pinned ${shortDate(issue.createdAt)}`,
+            ]}
+          />
           {voted ? (
             <p className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-brand py-3 font-semibold text-brand">
               <Check className="h-5 w-5" strokeWidth={2.5} /> You +1’d this

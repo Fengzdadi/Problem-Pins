@@ -24,6 +24,8 @@ export interface TodoItem {
   days: number;
   /** What started the wait and when, in a few words. The wait itself is `days`. */
   reason: string;
+  /** The same without the "when", for a row that shows `days` beside it: saying both is saying it twice. */
+  note: string;
 }
 
 export const TODO_GROUPS: { kind: TodoKind; title: string; rule: (rules: AttentionRules) => string }[] = [
@@ -69,23 +71,33 @@ export function reportsNote(issue: Issue) {
 
 export function todoFor(issue: Issue, rules: AttentionRules, today: string): TodoItem | null {
   if (issue.hidden || issue.mergedInto) return null;
-  const item = (kind: TodoKind, since: string, reason: string): TodoItem => ({ issue, kind, days: daysBetween(since, today), reason });
+  const item = (kind: TodoKind, since: string, reason: string, note: string): TodoItem => ({
+    issue,
+    kind,
+    days: daysBetween(since, today),
+    reason,
+    note,
+  });
 
-  if (issue.reports?.count) return item('reported', issue.reports.since, reportsNote(issue));
+  if (issue.reports?.count) return item('reported', issue.reports.since, reportsNote(issue), reportsNote(issue));
 
   if (issue.status === 'fixed') {
     if (!issue.notFixed) return null;
     const fixedOn = issue.fixedOn ?? issue.createdAt;
     const who = issue.notFixed === 1 ? '1 neighbor says' : `${issue.notFixed} neighbors say`;
-    return item('residents', fixedOn, `Marked fixed ${shortDate(fixedOn)} · ${who} it isn’t`);
+    return item('residents', fixedOn, `Marked fixed ${shortDate(fixedOn)} · ${who} it isn’t`, `Marked fixed · ${who} it isn’t`);
   }
 
-  if (untouched(issue)) return item('new', issue.createdAt, `Pinned ${shortDate(issue.createdAt)} · ${plural(issue.votes, 'neighbor')}`);
+  if (untouched(issue)) {
+    const neighbors = plural(issue.votes, 'neighbor');
+    return item('new', issue.createdAt, `Pinned ${shortDate(issue.createdAt)} · ${neighbors}`, neighbors);
+  }
 
-  const last = issue.updates.at(-1);
+  // A note the office hid isn't waiting for an answer.
+  const last = issue.updates.filter((u) => !u.hidden).at(-1);
   if (last?.role === 'resident') {
     const who = last.author === 'Neighbor' || last.author === 'You' ? 'A neighbor' : last.author;
-    return item('residents', last.date, `${who} commented ${shortDate(last.date)}: “${last.text}”`);
+    return item('residents', last.date, `${who} commented ${shortDate(last.date)}: “${last.text}”`, `${who}: “${last.text}”`);
   }
 
   const req = issue.cityRequest;
@@ -93,7 +105,13 @@ export function todoFor(issue: Issue, rules: AttentionRules, today: string): Tod
     // Waiting on the City: residents already see that, so the job is chasing the City.
     const since = req.lastFollowUp ?? req.sentOn;
     if (daysBetween(since, today) < rules.cityNoReplyDays) return null;
-    return item('city', since, `${req.agency} · SR ${req.sr} · ${req.lastFollowUp ? 'last follow-up' : 'sent'} ${shortDate(since)}`);
+    return item(
+      'city',
+      since,
+      `${req.agency} · SR ${req.sr} · ${req.lastFollowUp ? 'last follow-up' : 'sent'} ${shortDate(since)}`,
+      // The days count from the last contact, so the note says which contact that was.
+      `${req.agency} · SR ${req.sr} · ${req.lastFollowUp ? 'since the last follow-up' : 'no follow-up yet'}`,
+    );
   }
 
   // What residents last saw from the district: a written update, or a line in the history
@@ -103,10 +121,12 @@ export function todoFor(issue: Issue, rules: AttentionRules, today: string): Tod
   const seen = issue.history.filter((h) => !h.staffOnly);
   const change = seen.length > 1 ? seen[seen.length - 1] : undefined;
   const status = STATUSES[issue.status].label;
-  const quiet = (since: string, reason: string) => (daysBetween(since, today) < rules.quietDays ? null : item('quiet', since, reason));
-  if (update && !(change && change.date > update.date)) return quiet(update.date, `Last update ${shortDate(update.date)} · ${status}`);
-  if (change) return quiet(change.date, `Last change ${shortDate(change.date)}: ${change.text}`);
-  return quiet(issue.createdAt, `Pinned ${shortDate(issue.createdAt)}, nothing since · ${status}`);
+  const quiet = (since: string, reason: string, note: string) =>
+    daysBetween(since, today) < rules.quietDays ? null : item('quiet', since, reason, note);
+  if (update && !(change && change.date > update.date))
+    return quiet(update.date, `Last update ${shortDate(update.date)} · ${status}`, `${status} · nothing since the last update`);
+  if (change) return quiet(change.date, `Last change ${shortDate(change.date)}: ${change.text}`, `Last change: ${change.text}`);
+  return quiet(issue.createdAt, `Pinned ${shortDate(issue.createdAt)}, nothing since · ${status}`, `${status} · nothing since it was pinned`);
 }
 
 /** The whole list: group by group, longest wait first, then most neighbors. */
@@ -144,6 +164,28 @@ export function cityFigures(issues: Issue[], today: string): CityFigures {
     byAgency: [...counts]
       .map(([agency, count]) => ({ agency, count }))
       .sort((a, b) => b.count - a.count || a.agency.localeCompare(b.agency)),
+  };
+}
+
+export interface IntakeFigures {
+  /** Issues pinned in the last `days` days, today included. */
+  count: number;
+  /** Of those, how many the office has done something with. */
+  answered: number;
+  /** Issues pinned in the `days` days before that. */
+  before: number;
+}
+
+/** What came in lately and how much of it has an answer: whether the office is keeping up. */
+export function intakeFigures(issues: Issue[], today: string, days = 7): IntakeFigures {
+  const from = addDays(today, -(days - 1));
+  const earlier = addDays(from, -days);
+  const shown = issues.filter((i) => !i.hidden && !i.mergedInto);
+  const recent = shown.filter((i) => i.createdAt >= from && i.createdAt <= today);
+  return {
+    count: recent.length,
+    answered: recent.filter((i) => !untouched(i)).length,
+    before: shown.filter((i) => i.createdAt >= earlier && i.createdAt < from).length,
   };
 }
 
