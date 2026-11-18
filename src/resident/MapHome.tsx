@@ -84,7 +84,8 @@ const FixedRow = memo(function FixedRow({ issue }: { issue: Issue }) {
   );
 });
 
-export default function MapHome() {
+/** `focus`: an issue ID to center and highlight, from the map picture on its detail page. */
+export default function MapHome({ focus }: { focus?: string | null }) {
   const { issues, voted, following, confirmed, lastCreatedId, clearLastCreated, district, track, toast, account, vote } = useStore();
   const [category, setCategory] = useState<Category | 'all'>('all');
   const [sort, setSort] = useState<'votes' | 'newest'>('votes');
@@ -166,8 +167,10 @@ export default function MapHome() {
   const latestVote = useLatest(vote);
   const onVote = useCallback((id: string) => void latestVote.current(id, 'map'), [latestVote]);
   const created = lastCreatedId ? issues.find((i) => i.id === lastCreatedId) : undefined;
-  // A fresh pin centers the map when it opens; after that, searches and "locate me" take over.
-  const flyTo = target ?? (created ? { lat: created.lat, lng: created.lng } : undefined);
+  const focused = created ?? (focus ? issues.find((i) => i.id === focus && !i.hidden) : undefined);
+  // A fresh pin, or the problem the resident came from, centers the map when it opens; after that,
+  // searches and "locate me" take over.
+  const flyTo = target ?? (focused ? { lat: focused.lat, lng: focused.lng } : undefined);
   const showDropdown = searching && query.trim().length > 0;
   const issueMatches = showDropdown ? ranked.slice(0, 3) : [];
   // Same set as the confirm cards on "Your updates": fixed problems this device +1’d or follows.
@@ -187,9 +190,9 @@ export default function MapHome() {
       <div className="absolute inset-0">
         <IssueMap
           issues={visible}
-          selectedId={created?.id}
+          selectedId={focused?.id}
           center={flyTo}
-          centerKey={target ? target.n : created?.id}
+          centerKey={target ? target.n : focused?.id}
           pick={target?.place ?? null}
           voteLabelsAbove={60}
           showYou

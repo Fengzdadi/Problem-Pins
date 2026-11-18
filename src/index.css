@@ -39,7 +39,8 @@ body {
   background: #eef0f3;
 }
 
-.leaflet-tile-pane {
+.leaflet-tile-pane,
+.static-map-tiles {
   filter: grayscale(1) contrast(0.85) brightness(1.08);
 }
 

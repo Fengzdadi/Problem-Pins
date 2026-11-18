@@ -5,7 +5,7 @@ import { STATUSES } from '../data/meta';
 import { daysBetween, plural, shortDate, today } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
-import { FixQuestion, LABEL, LINK } from './shared';
+import { FixQuestion, LABEL, LINK, residentHistory } from './shared';
 
 interface FeedItem {
   key: string;
@@ -44,8 +44,8 @@ export default function Updates() {
         body: u.text,
         kind: u.role === 'partner' ? 'district' : 'resident',
       })),
-    ...issue.history
-      .filter((h) => !h.staffOnly && !h.text.startsWith('Pinned'))
+    ...residentHistory(issue.history)
+      .filter((h) => !h.text.startsWith('Pinned'))
       .map<FeedItem>((h, idx) => {
         const fixed = h.text.startsWith('Marked fixed');
         return {

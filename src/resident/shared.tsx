@@ -2,9 +2,17 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CATEGORY_ICONS } from '../components/ui';
 import { config, isDemo } from '../config';
 import { CATEGORIES } from '../data/meta';
-import type { AnalyticsEvent, Category, Issue } from '../data/types';
+import type { AnalyticsEvent, Category, HistoryEvent, Issue } from '../data/types';
 import { navigate } from '../router';
 import { useStore } from '../store';
+
+/**
+ * The history lines a resident sees. Staff-only lines never reach them; who at the district office
+ * holds a problem ("Assigned to …") is for staff too, like the owner on the status card.
+ */
+export function residentHistory(history: HistoryEvent[]) {
+  return history.filter((h) => !h.staffOnly && !/^(Assigned to |Unassigned$)/.test(h.text));
+}
 
 /** A section label: sentence case, never mono or capitals. */
 export const LABEL = 'text-xs font-medium text-slate-500';
@@ -85,6 +93,7 @@ export function ConfirmAction({
   cancelLabel = 'Cancel',
   onConfirm,
   className = '',
+  linkClassName,
 }: {
   label: string;
   question: ReactNode;
@@ -92,6 +101,8 @@ export function ConfirmAction({
   cancelLabel?: string;
   onConfirm: () => Promise<unknown>;
   className?: string;
+  /** The button's classes before it is pressed, instead of a plain link with `className`. */
+  linkClassName?: string;
 }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -106,7 +117,7 @@ export function ConfirmAction({
 
   if (!asking) {
     return (
-      <button ref={action} onClick={() => setAsking(true)} className={`${LINK} ${className}`}>
+      <button ref={action} onClick={() => setAsking(true)} className={linkClassName ?? `${LINK} ${className}`}>
         {label}
       </button>
     );

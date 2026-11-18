@@ -274,7 +274,7 @@ export default function App() {
         page = <Account next={query.get('next')} from={query.get('from')} />;
         break;
       default:
-        page = <MapHome />;
+        page = <MapHome focus={query.get('focus')} />;
     }
     content = (
       <ResidentShell>

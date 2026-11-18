@@ -75,7 +75,8 @@ export function Toast() {
   const { toastMessage } = useStore();
   if (!toastMessage) return null;
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[2000] flex justify-center px-4 print:hidden">
+    // A screen with a bar at the bottom (issue detail's +1) sets --toast-offset to keep it clear.
+    <div className="pointer-events-none fixed inset-x-0 bottom-[var(--toast-offset,1.5rem)] z-[2000] flex justify-center px-4 print:hidden">
       <div className="rounded-lg bg-ink px-4 py-2.5 text-sm font-medium text-white shadow-lg">{toastMessage}</div>
     </div>
   );

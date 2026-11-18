@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, ChevronUp, EyeOff, Share } from 'lucide-react';
+import StaticMap from '../components/StaticMap';
 import { StatusTag } from '../components/ui';
 import { config } from '../config';
 import { REMOVED_BY_PINNER, REPORT_REASONS, REPORT_REASON_ORDER, STATUSES } from '../data/meta';
-import type { District, FollowContact, Issue, ReportReason } from '../data/types';
-import { daysBetween, plural, shortDate } from '../lib/format';
+import type { District, FollowContact, Issue, IssueUpdate, ReportReason } from '../data/types';
+import { distanceMeters } from '../data/geo';
+import { daysBetween, formatMeters, plural, shortDate } from '../lib/format';
 import { removalBlocker } from '../lib/ownPin';
+import { useUserLocation } from '../lib/userLocation';
 import { navigate } from '../router';
 import { useStore } from '../store';
-import { BUTTON, CategoryLabel, ConfirmAction, FixQuestion, LABEL, LINK, goBack, shareIssue } from './shared';
+import { BUTTON, CategoryLabel, ConfirmAction, FixQuestion, LINK, goBack, residentHistory, shareIssue } from './shared';
 
 function statusCopy(issue: Issue, district: District): { title: string; body?: ReactNode } {
   const DISTRICT = district.name;
@@ -39,8 +42,9 @@ function statusCopy(issue: Issue, district: District): { title: string; body?: R
     case 'in_review':
       return { title: `${DISTRICT} is looking into it`, body: 'They are checking who is responsible for this and what it takes to fix.' };
     case 'scheduled':
-      // Only promise a message when one is really sent (config.notifications).
-      return { title: 'A fix is scheduled', body: config.notifications ? 'You’ll get a note when it’s marked done.' : undefined };
+      // Only promise a message when one is really sent (config.notifications). The tag above already
+      // says "Scheduled"; the district's latest update below says who fixes it and when.
+      return { title: 'A fix is on the way', body: config.notifications ? 'You’ll get a note when it’s marked done.' : undefined };
     case 'fixed':
       return {
         title: issue.fixedOn ? `Marked fixed on ${shortDate(issue.fixedOn)}` : 'Marked fixed',
@@ -50,6 +54,12 @@ function statusCopy(issue: Issue, district: District): { title: string; body?: R
       };
   }
 }
+
+/** A small gray link for what is rarely needed: deleting a note, reporting a pin. */
+/** A section heading: sentence case, darker and larger than a field label. */
+const HEADING = 'text-base font-semibold text-ink';
+
+const QUIET = 'text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-ink';
 
 /** "Phone or email" field → a contact the backend can store privately. */
 function parseContact(value: string): FollowContact | undefined {
@@ -138,21 +148,19 @@ function ReportPin({ issue }: { issue: Issue }) {
 
   if (store.reported.includes(issue.id)) {
     return (
-      <p className="text-sm text-slate-600">
-        You reported this pin. {store.district.name} will review it.
-      </p>
+      <p className="text-slate-600">You reported this pin. {store.district.name} will review it.</p>
     );
   }
   if (!open) {
     return (
-      <button ref={opener} onClick={() => setOpen(true)} className={`text-sm ${LINK}`}>
+      <button ref={opener} onClick={() => setOpen(true)} className={QUIET}>
         Report this pin
       </button>
     );
   }
   return (
     <form
-      className="rounded-xl border border-slate-200 p-4"
+      className="basis-full rounded-xl border border-slate-200 p-4 text-base"
       onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
       onSubmit={async (e) => {
         e.preventDefault();
@@ -200,7 +208,26 @@ export default function IssueDetail({ id }: { id?: string }) {
   const issue = id ? store.getIssue(id) : undefined;
   const [contact, setContact] = useState('');
   const [note, setNote] = useState('');
+  const you = useUserLocation().position;
   const exists = Boolean(issue);
+  // The +1 button scrolled out of sight: a bar at the bottom offers it again.
+  const voteButton = useRef<HTMLButtonElement>(null);
+  const [voteOutOfSight, setVoteOutOfSight] = useState(false);
+  const canVote = Boolean(issue && issue.status !== 'fixed' && !issue.hidden && !issue.mergedInto && !store.voted.includes(issue.id));
+  useEffect(() => {
+    const el = voteButton.current;
+    if (!el || !canVote) return setVoteOutOfSight(false);
+    const seen = new IntersectionObserver(([entry]) => setVoteOutOfSight(!entry.isIntersecting));
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [canVote, id]);
+  const showBar = canVote && voteOutOfSight;
+  useEffect(() => {
+    if (!showBar) return;
+    const root = document.documentElement.style;
+    root.setProperty('--toast-offset', '5.5rem');
+    return () => void root.removeProperty('--toast-offset');
+  }, [showBar]);
 
   useEffect(() => {
     if (id && exists) track({ name: 'issue_view', issueId: id });
@@ -245,6 +272,82 @@ export default function IssueDetail({ id }: { id?: string }) {
   const where = store.account ? 'in your account' : 'on this phone';
   const status = STATUSES[issue.status];
   const copy = statusCopy(issue, district);
+  // The district's latest update goes on the status card: it is where the problem stands now. The
+  // earlier ones sit in the history, on the day they were posted. Neighbors' notes have their own section.
+  const fromDistrict = issue.updates.filter((u) => u.role === 'partner');
+  const latest = fromDistrict.reduce<IssueUpdate | undefined>((a, u) => (!a || u.date >= a.date ? u : a), undefined);
+  const timeline = [
+    ...residentHistory(issue.history).map((h) => ({ date: h.date, text: h.text, update: false })),
+    ...fromDistrict.filter((u) => u !== latest).map((u) => ({ date: u.date, text: u.text, update: true })),
+  ].sort((a, b) => a.date.localeCompare(b.date)); // stable: on one day, the event before the update about it
+  const notes = issue.updates.filter((u) => u.role !== 'partner');
+  const meters = you ? distanceMeters(you, issue) : null;
+  // What this phone has to do with the problem, said once, under the +1. Stopping a follow is offered
+  // only where it takes the problem off Your updates or leaves the +1 as the reason it stays.
+  const unfollow = (
+    <button
+      onClick={async () => {
+        if (await store.unfollow(issue.id)) store.toast(config.notifications ? 'You won’t get messages about this any more' : 'You’re no longer following this');
+      }}
+      className={LINK}
+    >
+      Stop following
+    </button>
+  );
+  const tieClass = 'mt-1.5 text-sm leading-relaxed text-slate-600';
+  let tie: ReactNode = null;
+  if (mine) {
+    tie = (
+      <div className={`${tieClass} space-y-1.5`}>
+        <p>
+          You pinned this. {config.notifications && following ? 'You’ll get a text or email when it changes' : <>It’s in {yourUpdates} {where}</>}.
+        </p>
+        {!issue.hidden && <RemovePin issue={issue} />}
+      </div>
+    );
+  } else if (config.notifications) {
+    if (following) tie = <p className={tieClass}>You’ll get a text or email when this changes · {unfollow}</p>;
+  } else if (voted) {
+    tie = (
+      <p className={tieClass}>
+        In {yourUpdates} {where}
+        {/* Not on a fixed or hidden problem, and not from the map list, where a stray tap would undo it. */}
+        {issue.status !== 'fixed' && !issue.hidden && (
+          <>
+            {' · '}
+            <button
+              onClick={async () => {
+                if (await store.unvote(issue.id)) store.toast('Your +1 is taken back');
+              }}
+              className={LINK}
+            >
+              Take back your +1
+            </button>
+          </>
+        )}
+        {following && <> · {unfollow}</>}
+      </p>
+    );
+  } else if (following) {
+    tie = (
+      <p className={tieClass}>
+        Following · in {yourUpdates} {where} · {unfollow}
+      </p>
+    );
+  } else if (issue.status !== 'fixed' && !issue.hidden) {
+    tie = (
+      <p className={tieClass}>
+        <button
+          onClick={async () => {
+            if (await store.follow(issue.id)) store.toast(`Following. It’s in Your updates ${where}`);
+          }}
+          className={LINK}
+        >
+          Or follow it without a +1
+        </button>
+      </p>
+    );
+  }
   const rank =
     [...store.issues].filter((i) => i.status !== 'fixed').sort((a, b) => b.votes - a.votes).findIndex((i) => i.id === issue.id) + 1;
 
@@ -270,18 +373,33 @@ export default function IssueDetail({ id }: { id?: string }) {
         </p>
       )}
 
-      <div className="space-y-6 px-5 pt-4">
+      <div className="space-y-7 px-5 pt-4">
         <div>
           <p className="flex items-center gap-1.5 text-xs text-slate-500">
             <span className="font-mono">{issue.id}</span> · <CategoryLabel category={issue.category} iconClass="h-3.5 w-3.5 text-slate-500" />
           </p>
           <h1 className="mt-1 text-2xl font-bold leading-tight">{issue.title}</h1>
-          <p className="mt-1 text-[15px] text-slate-600">
-            {issue.locationDetail ?? issue.locationLabel} · pinned {shortDate(issue.createdAt)}
+          {/* Where it stands first, then where it is. When it was pinned is the first line of the history. */}
+          <p className="mt-1.5 text-[15px] text-slate-600">
+            <StatusTag status={issue.status} resident className="font-medium text-ink" /> · {issue.locationDetail ?? issue.locationLabel}
+            {meters !== null && meters >= 10 && ` · ${formatMeters(meters)} away`}
           </p>
           {issue.description && <p className="mt-3 text-[15px] leading-relaxed text-slate-700">{issue.description}</p>}
+          {/* Many arrive from a poster or a shared link, not from the map: show where it is. */}
+          {!issue.hidden && (
+            <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+              <StaticMap
+                lat={issue.lat}
+                lng={issue.lng}
+                height={128}
+                label={`Show ${issue.locationDetail ?? issue.locationLabel} on the map`}
+                onOpen={() => navigate(`/?focus=${issue.id}`)}
+              />
+            </div>
+          )}
         </div>
 
+        {/* The +1, and right under it what this phone has to do with the problem. */}
         <div>
           {issue.status === 'fixed' ? (
             <FixQuestion issue={issue} />
@@ -291,6 +409,7 @@ export default function IssueDetail({ id }: { id?: string }) {
             </p>
           ) : (
             <button
+              ref={voteButton}
               onClick={() => store.vote(issue.id, 'detail')}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand px-4 py-2.5 font-semibold text-white hover:bg-brand-dark"
             >
@@ -309,45 +428,59 @@ export default function IssueDetail({ id }: { id?: string }) {
             {rank === 1 && ` · most +1’d open problem in ${district.area}`}
             {(rank === 2 || rank === 3) && ` · #${rank} most +1’d open problem in ${district.area}`}
           </p>
-          {/* Not on your own pin, and not from the map list, where a stray tap would undo it. */}
-          {voted && !mine && issue.status !== 'fixed' && !issue.hidden && (
-            <button
-              onClick={async () => {
-                if (await store.unvote(issue.id)) store.toast('Your +1 is taken back');
-              }}
-              className={`mt-1.5 text-sm ${LINK}`}
-            >
-              Take back your +1
-            </button>
-          )}
+          {tie}
         </div>
 
         <div className="rounded-xl border p-4" style={{ background: status.soft, borderColor: `${status.color}55` }}>
-          <StatusTag status={issue.status} resident className="text-sm font-medium" />
-          <p className="mt-1.5 text-lg font-bold leading-snug">{copy.title}</p>
-          {copy.body && <p className="mt-1 text-sm leading-relaxed text-slate-700">{copy.body}</p>}
-          {/* The City agency that owns it, once known. Who at the district office holds it is for staff. */}
-          {issue.agency && issue.status !== 'sent_to_city' && issue.status !== 'fixed' && (
-            <p className="mt-1 text-sm leading-relaxed text-slate-700">{issue.agency} is responsible for this.</p>
+          <p className="text-lg font-bold leading-snug">{copy.title}</p>
+          {/* One paragraph: the district's own words when there are some, else what the status means. */}
+          {latest ? (
+            <>
+              <p className="mt-1.5 text-[15px] leading-relaxed text-slate-800">
+                <span className="font-semibold">
+                  {district.name}, {shortDate(latest.date)}:
+                </span>{' '}
+                {latest.text}
+              </p>
+              {issue.status === 'sent_to_city' && issue.cityRequest && (
+                <p className="mt-1.5 text-sm text-slate-700">
+                  {issue.cityRequest.agency ?? issue.agency ?? 'City'} · 311 request{' '}
+                  <span className="whitespace-nowrap font-mono">{issue.cityRequest.sr}</span> · filed {shortDate(issue.cityRequest.sentOn)}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              {copy.body && <p className="mt-1.5 text-[15px] leading-relaxed text-slate-700">{copy.body}</p>}
+              {/* The City agency that owns it, once known. Who at the district office holds it is for staff. */}
+              {issue.agency && issue.status !== 'sent_to_city' && issue.status !== 'fixed' && (
+                <p className="mt-1 text-[15px] leading-relaxed text-slate-700">{issue.agency} is responsible for this.</p>
+              )}
+            </>
           )}
-          <p className="mt-3 text-xs text-slate-600">Problem Pins status, tracked by {district.name}. Not an official NYC 311 status.</p>
+          <p className="mt-3 text-xs text-slate-600">Tracked by {district.name}, not an official NYC 311 status.</p>
         </div>
 
-        <section>
-          <h2 className={`${LABEL} mb-2`}>History</h2>
-          <ol className="space-y-2.5">
-            {issue.history
-              .filter((h) => !h.staffOnly)
-              .map((h, idx) => (
-                <li key={idx} className="flex gap-3 text-[15px]">
-                  <span className="w-12 shrink-0 pt-0.5 text-xs text-slate-500">{shortDate(h.date)}</span>
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-ink" />
-                  <span>{h.text}</span>
-                </li>
-              ))}
+        <section className="border-t border-slate-100 pt-6">
+          <h2 className={`${HEADING} mb-3`}>History</h2>
+          <ol className="space-y-3">
+            {timeline.map((t, idx) => (
+              <li key={idx} className="flex gap-3 text-[15px]">
+                <span className="w-12 shrink-0 pt-0.5 text-xs text-slate-500">{shortDate(t.date)}</span>
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-ink" />
+                {t.update ? (
+                  <span className="min-w-0">
+                    {district.name} posted an update
+                    <span className="mt-1 block border-l-2 border-slate-200 pl-3 leading-relaxed text-slate-700">{t.text}</span>
+                  </span>
+                ) : (
+                  <span>{t.text}</span>
+                )}
+              </li>
+            ))}
             {issue.status !== 'fixed' && (
               <li className="flex gap-3 text-[15px] text-slate-500">
-                <span className="w-12 shrink-0" />
+                <span className="w-12 shrink-0 pt-0.5 text-xs">Next</span>
                 <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full border border-slate-400" />
                 <span>Fixed, then confirmed by neighbors</span>
               </li>
@@ -355,29 +488,28 @@ export default function IssueDetail({ id }: { id?: string }) {
           </ol>
         </section>
 
-        <section>
-          <h2 className={LABEL}>Updates</h2>
-          {issue.updates.map((u) => (
+        <section className="border-t border-slate-100 pt-6">
+          <h2 className={HEADING}>Notes from neighbors</h2>
+          {notes.map((u) => (
             <div key={u.id} className="border-b border-slate-100 py-3">
-              <p className="flex flex-wrap items-baseline gap-x-2">
+              <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="text-[15px] font-semibold">{u.author}</span>
-                <span className="text-xs text-slate-500">
-                  {u.role === 'partner' && 'District office · '}
-                  {shortDate(u.date)}
-                </span>
-              </p>
-              <p className="mt-0.5 text-[15px] leading-relaxed text-slate-700">{u.text}</p>
-              {u.mine && (
-                <ConfirmAction
-                  label="Delete"
-                  question="Delete this note? It can’t be brought back."
-                  confirmLabel="Delete note"
-                  className="mt-1 text-sm"
-                  onConfirm={async () => {
-                    if (await store.deleteNote(issue.id, u.id)) store.toast('Note deleted');
-                  }}
-                />
-              )}
+                <span className="text-xs text-slate-500">{shortDate(u.date)}</span>
+                {u.mine && (
+                  <ConfirmAction
+                    label="Delete"
+                    question="Delete this note? It can’t be brought back."
+                    confirmLabel="Delete note"
+                    linkClassName={`ml-auto text-xs ${QUIET}`}
+                    className="order-last mt-2 basis-full text-sm"
+                    onConfirm={async () => {
+                      if (await store.deleteNote(issue.id, u.id)) store.toast('Note deleted');
+                    }}
+                  />
+                )}
+                {/* In the row so that the delete question, once asked, comes after the note. */}
+                <p className="mt-0.5 basis-full text-[15px] leading-relaxed text-slate-700">{u.text}</p>
+              </div>
             </div>
           ))}
           <form
@@ -401,68 +533,11 @@ export default function IssueDetail({ id }: { id?: string }) {
             />
             <button className={`${BUTTON} px-3 text-sm`}>Post</button>
           </form>
+          <p className="mt-1.5 text-xs text-slate-500">Neighbors and {district.name} see your note. Leave out names and phone numbers.</p>
         </section>
 
-        {!config.notifications ? (
-          // No texts or emails are sent yet: a problem is under Your updates while this phone pinned it,
-          // +1’d it or follows it, and the sentence says which. Stopping a follow is offered only where
-          // it takes the problem off Your updates or leaves the +1 as the reason it stays.
-          mine ? (
-            <div className="space-y-2 text-sm leading-relaxed text-slate-600">
-              <p>You pinned this. Changes show under {yourUpdates} {where}.</p>
-              {!issue.hidden && <RemovePin issue={issue} />}
-            </div>
-          ) : following ? (
-            <div className="text-sm leading-relaxed text-slate-600">
-              <p>You’re following this. Changes show under {yourUpdates} {where}.</p>
-              <button
-                onClick={async () => {
-                  if (await store.unfollow(issue.id)) store.toast('You’re no longer following this');
-                }}
-                className={`mt-1.5 ${LINK}`}
-              >
-                Stop following
-              </button>
-            </div>
-          ) : voted ? (
-            <p className="text-sm leading-relaxed text-slate-600">You +1’d this, so changes show under {yourUpdates} {where}.</p>
-          ) : (
-            <section className="flex items-center gap-3 rounded-xl border border-slate-200 p-4">
-              <div className="flex-1">
-                <h2 className="font-semibold">Follow this problem</h2>
-                <p className="mt-0.5 text-sm text-slate-600">
-                  {store.account ? 'It stays under Your updates, in your account.' : 'It stays under Your updates on this phone. No account needed.'}
-                </p>
-              </div>
-              <button
-                onClick={async () => {
-                  if (await store.follow(issue.id)) store.toast('Following this problem');
-                }}
-                className={`${BUTTON} shrink-0 px-4 py-2 text-sm`}
-              >
-                Follow
-              </button>
-            </section>
-          )
-        ) : following ? (
-          <div className="text-sm leading-relaxed text-slate-600">
-            <p>You’ll get a text or email when this changes.</p>
-            {/* Stopping also deletes the phone number or email left for it. */}
-            <button
-              onClick={async () => {
-                if (await store.unfollow(issue.id)) store.toast('You won’t get messages about this any more');
-              }}
-              className={`mt-1.5 ${LINK}`}
-            >
-              Stop following
-            </button>
-            {mine && !issue.hidden && (
-              <div className="mt-2">
-                <RemovePin issue={issue} />
-              </div>
-            )}
-          </div>
-        ) : (
+        {/* With texts and emails on, following takes a phone number or email: a form of its own. */}
+        {config.notifications && !following && (
           <section className="rounded-xl border border-slate-200 p-4">
             <h2 className="mb-2 font-semibold">Get a text or email when this changes</h2>
             <form
@@ -487,15 +562,26 @@ export default function IssueDetail({ id }: { id?: string }) {
           </section>
         )}
 
-        {/* Reporting your own pin makes no sense: you can remove it, or add a note. */}
-        {!mine && !issue.hidden && <ReportPin issue={issue} />}
-
-        <p className="text-sm">
-          <a href="#/about" className={LINK}>
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-3 border-t border-slate-100 pt-4 text-sm">
+          {/* Reporting your own pin makes no sense: you can remove it, or add a note. */}
+          {!mine && !issue.hidden && <ReportPin issue={issue} />}
+          <a href="#/about" className={QUIET}>
             About Problem Pins
           </a>
-        </p>
+        </div>
       </div>
+
+      {showBar && (
+        <div className="sticky bottom-0 z-[1000] mt-4 border-t border-slate-200 bg-white/95 px-5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur">
+          <button
+            onClick={() => store.vote(issue.id, 'detail_bar')}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand px-4 py-2.5 font-semibold text-white hover:bg-brand-dark"
+          >
+            <ChevronUp className="h-4 w-4" strokeWidth={2.5} /> +1 This is my problem too
+            <span className="font-normal opacity-90">· {issue.votes}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
