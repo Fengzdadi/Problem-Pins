@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check, ExternalLink, Eye, EyeOff, GitMerge, Search, Send } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { CategoryTag, PhotoThumb, SampleBadge, StatusTag, fieldBoxClass, labelClass, linkClass } from '../components/ui';
 import { CATEGORIES, STATUSES, STATUS_ORDER } from '../data/meta';
 import type { Issue, Status } from '../data/types';
 import { daysBetween, plural, shortDate, today } from '../lib/format';
+import { useProgressive } from '../lib/useProgressive';
 import { navigate } from '../router';
 import { useStore } from '../store';
 import { CHECK_311, copySr } from './actions';
@@ -351,6 +352,52 @@ function Facts({ issue }: { issue: Issue }) {
   );
 }
 
+/** One row of the list. Memoized: picking an issue re-renders two rows, a +1 one. */
+const ListRow = memo(function ListRow({
+  issue: i,
+  note,
+  urgent,
+  current,
+  href,
+}: {
+  issue: Issue;
+  note?: string;
+  urgent: boolean;
+  current: boolean;
+  href: string;
+}) {
+  return (
+    <li>
+      <button
+        onClick={() => navigate(href)}
+        aria-current={current ? 'true' : undefined}
+        className={`block w-full border-b border-slate-100 px-4 py-3 text-left -outline-offset-2 md:px-5 ${
+          current ? 'hover:bg-slate-50 md:bg-slate-100 md:hover:bg-slate-100' : 'hover:bg-slate-50'
+        }`}
+      >
+        <span className="flex justify-between gap-3 text-xs text-slate-500">
+          <span className="font-mono">{i.id}</span>
+          {i.mergedInto ? (
+            <span>
+              merged into <span className="font-mono">{i.mergedInto}</span>
+            </span>
+          ) : (
+            <span>{i.hidden ? 'hidden' : `pinned ${shortDate(i.createdAt)}`}</span>
+          )}
+        </span>
+        <span className="block font-medium">{i.title}</span>
+        <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
+          <CategoryTag category={i.category} />
+          <StatusTag status={i.status} />
+          <span className="text-slate-500">{plural(i.votes, 'neighbor')}</span>
+        </span>
+        {note && <span className={`mt-1 block truncate text-xs ${urgent ? 'font-medium text-brand-dark' : 'text-slate-500'}`}>{note}</span>}
+        {i.hidden && i.hiddenReason && <span className="mt-1 block truncate text-xs text-slate-500">{i.hiddenReason}</span>}
+      </button>
+    </li>
+  );
+});
+
 export default function Issues({ selectedId, tab }: { selectedId?: string; tab: string }) {
   const store = useStore();
   const [query, setQuery] = useState('');
@@ -369,6 +416,8 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
     () => issueList(activeTab.id, { issues: store.issues, hidden: store.hiddenIssues }, rules, day, query),
     [activeTab.id, store.issues, store.hiddenIssues, rules, day, query],
   );
+  // The list mounts a page of rows at a time (a district can have thousands of issues).
+  const list = useProgressive(rows, `${activeTab.id}|${query.trim()}`, 60);
   const counts = useMemo(() => {
     const pools = { issues: store.issues, hidden: store.hiddenIssues };
     return Object.fromEntries(TABS.map((t) => [t.id, tabCount(t.id, pools, rules, day)])) as Record<TabId, number>;
@@ -441,38 +490,17 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
           }`}
         >
           <li className="border-b border-slate-100 px-4 py-2 text-xs text-slate-500 md:px-5">{summary}</li>
-          {rows.map(({ issue: i, note }) => (
-            <li key={i.id}>
-              <button
-                onClick={() => navigate(linkFor(i.id))}
-                aria-current={issue?.id === i.id ? 'true' : undefined}
-                className={`block w-full border-b border-slate-100 px-4 py-3 text-left -outline-offset-2 md:px-5 ${
-                  issue?.id === i.id ? 'hover:bg-slate-50 md:bg-slate-100 md:hover:bg-slate-100' : 'hover:bg-slate-50'
-                }`}
-              >
-                <span className="flex justify-between gap-3 text-xs text-slate-500">
-                  <span className="font-mono">{i.id}</span>
-                  {i.mergedInto ? (
-                    <span>
-                      merged into <span className="font-mono">{i.mergedInto}</span>
-                    </span>
-                  ) : (
-                    <span>{i.hidden ? 'hidden' : `pinned ${shortDate(i.createdAt)}`}</span>
-                  )}
-                </span>
-                <span className="block font-medium">{i.title}</span>
-                <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
-                  <CategoryTag category={i.category} />
-                  <StatusTag status={i.status} />
-                  <span className="text-slate-500">{plural(i.votes, 'neighbor')}</span>
-                </span>
-                {note && (
-                  <span className={`mt-1 block truncate text-xs ${note.urgent ? 'font-medium text-brand-dark' : 'text-slate-500'}`}>{note.text}</span>
-                )}
-                {i.hidden && i.hiddenReason && <span className="mt-1 block truncate text-xs text-slate-500">{i.hiddenReason}</span>}
-              </button>
-            </li>
+          {list.shown.map(({ issue: i, note }) => (
+            <ListRow
+              key={i.id}
+              issue={i}
+              note={note?.text}
+              urgent={Boolean(note?.urgent)}
+              current={issue?.id === i.id}
+              href={linkFor(i.id)}
+            />
           ))}
+          {list.more && <li ref={list.sentinel} aria-hidden className="h-px" />}
           {!rows.length && (
             <li className="p-8 text-center text-sm text-slate-500">
               {searching

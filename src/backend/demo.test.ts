@@ -33,6 +33,43 @@ beforeEach(() => {
 const find = async (id: string) => (await backend.load()).issues.find((i) => i.id === id)!;
 
 describe('DemoBackend', () => {
+  it('sends only what changed since a cursor', async () => {
+    const start = await backend.load();
+    const none = (await backend.loadChanges(start.cursor))!;
+    expect(none.issues).toEqual([]);
+    expect(none.removed).toEqual([]);
+    expect(none.me).toEqual(start.me);
+
+    await backend.vote('PP-2431');
+    const some = (await backend.loadChanges(none.cursor))!;
+    expect(some.issues.map((i) => i.id)).toEqual(['PP-2431']);
+    expect(some.issues[0]).toEqual(await find('PP-2431'));
+    expect(some.me.voted).toContain('PP-2431');
+
+    // Staff see hidden issues; once signed out, a resident's snapshot has them removed.
+    await backend.hideIssue('PP-2431', 'Spam');
+    const later = await backend.load();
+    await backend.signOut();
+    const resident = (await backend.loadChanges(later.cursor))!;
+    expect(resident.removed).toEqual(['PP-2431']);
+    expect(resident.issues.every((i) => !i.reports && i.history.every((h) => !h.staffName))).toBe(true);
+
+    expect(await backend.loadChanges('unknown')).toBeNull();
+  });
+
+  it('sends what another tab changed once its save arrives', async () => {
+    const start = await backend.load();
+    const otherTab = new DemoBackend(storage);
+    await otherTab.vote('PP-2440');
+    await otherTab.hideIssue('PP-2431', 'Spam');
+    // What `subscribe` does on the `storage` event (there is no window here): read the saved state.
+    const tab = backend as unknown as { state: unknown; read(): unknown };
+    tab.state = tab.read();
+    const changes = (await backend.loadChanges(start.cursor))!;
+    expect(changes.issues.map((i) => i.id).sort()).toEqual(['PP-2431', 'PP-2440']);
+    expect(changes.me.voted).toContain('PP-2440');
+  });
+
   it('generates sequential IDs and counts the reporter as a vote and a follower', async () => {
     const a = await backend.createIssue(draft);
     const b = await backend.createIssue(draft);

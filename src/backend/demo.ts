@@ -19,7 +19,7 @@ import type {
 } from '../data/types';
 import { DEMO_TODAY, plural } from '../lib/format';
 import { removalBlocker } from '../lib/ownPin';
-import type { Backend, NewIssueDraft, Snapshot } from './types';
+import type { Backend, NewIssueDraft, Snapshot, SnapshotChanges } from './types';
 
 /**
  * Sample-data backend for presentations and UI work. Everything lives in this browser's
@@ -32,6 +32,8 @@ import type { Backend, NewIssueDraft, Snapshot } from './types';
 // v3: issues gained `notFixed`.)
 export const DEMO_STORAGE_KEY = 'problem-pins-demo-v5';
 const MAX_EVENTS = 2000;
+/** How many earlier snapshots `loadChanges` can answer from; older cursors get a whole snapshot. */
+const KEPT_CURSORS = 8;
 
 export const DEMO_STAFF: StaffUser = {
   id: 'demo-staff',
@@ -127,6 +129,9 @@ export class DemoBackend implements Backend {
   private state: DemoState;
   private authListeners = new Set<(staff: StaffUser | null) => void>();
   private readonly storage: KeyValueStorage | null;
+  /** What each recent cursor's snapshot held: issue ID → the issue as JSON. */
+  private sent = new Map<string, Map<string, string>>();
+  private cursorSeq = 0;
 
   constructor(storage: KeyValueStorage | null = typeof localStorage === 'undefined' ? null : localStorage) {
     this.storage = storage;
@@ -216,6 +221,23 @@ export class DemoBackend implements Backend {
   // ---- reads ----
 
   async load(): Promise<Snapshot> {
+    const { issues, scanPoints, me } = this.view();
+    return { district: structuredClone(DEMO_DISTRICT), issues, scanPoints, me, cursor: this.remember(issues) };
+  }
+
+  /** Compares what this viewer sees now with what the cursor's snapshot held. */
+  async loadChanges(cursor: string): Promise<SnapshotChanges | null> {
+    const before = this.sent.get(cursor);
+    if (!before) return null;
+    const { issues, scanPoints, me } = this.view();
+    const changed = issues.filter((i) => before.get(i.id) !== JSON.stringify(i));
+    const now = new Set(issues.map((i) => i.id));
+    const removed = [...before.keys()].filter((id) => !now.has(id));
+    return { district: structuredClone(DEMO_DISTRICT), issues: changed, removed, scanPoints, me, cursor: this.remember(issues) };
+  }
+
+  /** Everything this viewer may see, as copies the caller can keep. */
+  private view() {
     const { issues, scanPoints, me, staffSignedIn } = this.state;
     const visible = structuredClone(staffSignedIn ? issues : issues.filter((i) => !i.hidden));
     for (const issue of visible) {
@@ -226,7 +248,14 @@ export class DemoBackend implements Backend {
         stripStaffOnly(issue);
       }
     }
-    return structuredClone({ district: DEMO_DISTRICT, issues: visible, scanPoints, me });
+    return { issues: visible, scanPoints: structuredClone(scanPoints), me: structuredClone(me) };
+  }
+
+  private remember(issues: Issue[]) {
+    const cursor = String(++this.cursorSeq);
+    this.sent.set(cursor, new Map(issues.map((i) => [i.id, JSON.stringify(i)])));
+    for (const old of this.sent.keys()) if (this.sent.size > KEPT_CURSORS) this.sent.delete(old);
+    return cursor;
   }
 
   subscribe(onChange: () => void) {

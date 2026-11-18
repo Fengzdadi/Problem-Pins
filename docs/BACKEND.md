@@ -63,6 +63,45 @@ updates signed by the district. So do residents' reports: staff get, per issue, 
 reported it, since when and why; a device only learns that it reported an issue (`me.reported`).
 History lines marked `staff_only` (dismissed reports) are left out for residents.
 
+**Only what changed.** Re-reading the whole district on every change doesn't scale: at 2,000 issues
+a snapshot is 3.3 MB (about 335 kB gzipped) and ~90 ms of database time, and every +1 used to make
+every open app fetch one. So `get_snapshot` also returns a `cursor` and `today` (New York), and the
+app then calls `get_changes(district, cursor)` after its own mutations and on change pings. It
+returns the district, scan points and `me` in full (they're small), only the issues that changed
+since the cursor (built by the same function as the snapshot, so the same viewer rules apply),
+`removed` (ids of changed issues this viewer can no longer see, e.g. just hidden), and a new cursor.
+At 2,000 issues that is a few kB and under 2 ms. How it knows what changed
+(`20261117000000_incremental_snapshot.sql`): every issue keeps `changed_xid`, the last transaction
+that changed it or any of its records (triggers on the issue and on votes, follows, notes, history,
+fix answers, City requests and reports; a merge also touches the issue it went into; moving records
+in `merge_device` and `delete_resident_account` goes through the same triggers). The cursor is the
+oldest transaction still running when the snapshot was read (`pg_snapshot_xmin` of the snapshot the
+read used), so a change that began before the read and committed after it is sent next time; an
+issue may be sent twice, never missed. Each change to an issue takes its row lock, so the last
+transaction recorded on it is also the last to commit. Transaction ids are 64-bit (`xid8`), so they
+never wrap around; a rolled-back change leaves nothing behind. One cost: a transaction left open
+for a long time anywhere in the database holds every cursor back, so changes get bigger (still
+correct) until it ends.
+
+The app asks for a whole snapshot instead when:
+- the viewer changed (sign-in, sign-out, a returning resident account, deleting one): the app keeps
+  whose cursor it is and compares it with the session;
+- the viewer's staff rights changed under the same sign-in (an admin added or removed their
+  `staff` row): the cursor says whether it was read as staff (`<xid>:s` / `<xid>:r`), and
+  `get_changes` answers `{ "reload": true }` (`20261117000001_changes_viewer_check.sql`); it gives
+  the same answer for a cursor it can't read;
+- `today` moved on ("this week" counts change without any record changing). The app also catches
+  up when it comes back to the foreground, so a phone that slept overnight notices;
+- a mutation failed (to undo its optimistic change), or reading the changes failed.
+
+`removed` names hidden issues by id only; ids are sequential anyway, so it says no more than a gap
+in the numbers.
+
+**First load.** A device that already has a session reads as itself. A new device (no session in
+the browser yet) reads `get_snapshot` while its anonymous sign-in is still going, as `anon`: until
+it has done something it sees exactly what any other new device sees, so the two requests run side
+by side instead of one after the other.
+
 **Writes.** Every mutation is a Postgres function (RPC): `create_issue`, `vote`, `unvote`,
 `follow`, `unfollow`, `comment`, `delete_note`, `confirm_fix`, `remove_issue`, `report_issue`, and
 for staff `post_update`, `set_status`, `assign`, `send_to_city`, `nudge_city`, `hide_issue`,
@@ -96,8 +135,8 @@ read them directly.
 
 **Realtime.** A trigger on issues, updates, history, votes, follows, confirmations, city requests,
 reports and scan points sends one empty broadcast per district per transaction on the private topic
-`district:<id>`. Clients reload their snapshot when it arrives (at most once a second), so nothing
-private goes over the socket and the functions still decide what each viewer sees (a hidden issue
+`district:<id>`. Clients ask for what changed (`get_changes`, above) when it arrives (at most once
+a second), so nothing private goes over the socket and the functions still decide what each viewer sees (a hidden issue
 disappears for residents). Signed-in devices may listen; nobody may send, because
 `realtime.messages` has a select policy and no insert policy. Hosted projects must also turn off
 public channels: otherwise anyone can join a public channel of the same name, and on Realtime
@@ -227,7 +266,7 @@ accounts, reading the codes from the stack's mail catcher (Mailpit, http://127.0
 account in place, returning sign-in and merge, sign-out, staff next to accounts, delete, and the
 function guards. It creates two throwaway districts with their own staff
 and removes them afterwards, so the sample data is untouched. It covers RLS (no hidden issues,
-contacts, reports or staff names for residents, one vote per device, no staff actions for
+contacts, reports or staff names for residents, also in `get_changes`, one vote per device, no staff actions for
 residents, no cross-district staff access, no removing someone else's pin or note) and the main
 RPCs, uploads and Realtime (including that no device can send pings).
 

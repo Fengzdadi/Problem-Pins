@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo } from 'react';
 import L from 'leaflet';
 import { Circle, CircleMarker, MapContainer, Marker, Polygon, Polyline, TileLayer, Tooltip, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import { config } from '../config';
 import { STATUSES } from '../data/meta';
 import type { DistrictBoundary, Issue } from '../data/types';
 import { boundaryLatLngs } from '../lib/geometry';
+import { useLatest } from '../lib/useLatest';
 import { useStore } from '../store';
 import markerSvg from '../../brand/map-marker.svg?raw';
 
@@ -50,6 +51,58 @@ const pinIcon = L.divIcon({
 function radiusFor(issue: Issue, sizeByVotes: boolean) {
   return sizeByVotes ? 4 + Math.sqrt(issue.votes) * 0.85 : 6;
 }
+
+/**
+ * One issue's dot. Memoized: react-leaflet restyles and moves a marker whenever it re-renders, so
+ * with 2,000 issues a +1 would otherwise touch 2,000 markers. Now it touches the one that changed.
+ */
+const IssueMarker = memo(function IssueMarker({
+  issue,
+  selected,
+  sizeByVotes,
+  label,
+  onSelect,
+}: {
+  issue: Issue;
+  selected: boolean;
+  sizeByVotes: boolean;
+  label: boolean;
+  onSelect: (issue: Issue) => void;
+}) {
+  const color = STATUSES[issue.status].color;
+  const r = radiusFor(issue, sizeByVotes);
+  return (
+    <CircleMarker
+      center={[issue.lat, issue.lng]}
+      radius={selected ? r + 4 : r}
+      pathOptions={{
+        color: selected ? '#141b2d' : 'white',
+        weight: selected ? 2 : 1.5,
+        dashArray: selected ? '3 3' : undefined,
+        fillColor: color,
+        fillOpacity: 0.95,
+      }}
+      eventHandlers={{ click: () => onSelect(issue) }}
+    >
+      {label && (
+        <Tooltip permanent direction="right" offset={[r, 0]} className="vote-label">
+          {issue.votes}
+        </Tooltip>
+      )}
+    </CircleMarker>
+  );
+});
+
+const HeatCircle = memo(function HeatCircle({ issue, onSelect }: { issue: Issue; onSelect: (issue: Issue) => void }) {
+  return (
+    <Circle
+      center={[issue.lat, issue.lng]}
+      radius={30 + issue.votes * 1.4}
+      pathOptions={{ stroke: false, fillColor: '#ef5a1f', fillOpacity: 0.12 }}
+      eventHandlers={{ click: () => onSelect(issue) }}
+    />
+  );
+});
 
 function FlyTo({ center, zoom, centerKey }: { center?: LatLng; zoom?: number; centerKey?: string | number }) {
   const map = useMap();
@@ -154,7 +207,10 @@ export default function IssueMap({
 }: Props) {
   const { district } = useStore();
   const start = center ?? district.center;
-  const ordered = [...issues].sort((a, b) => a.votes - b.votes);
+  const ordered = useMemo(() => [...issues].sort((a, b) => a.votes - b.votes), [issues]);
+  // Callers pass a new arrow function on every render; the markers get one that calls the latest.
+  const latestSelect = useLatest(onSelect);
+  const select = useCallback((issue: Issue) => latestSelect.current?.(issue), [latestSelect]);
 
   return (
     <MapContainer
@@ -178,41 +234,19 @@ export default function IssueMap({
       {onPick && interactive && <WheelScrollsPage />}
       {showBoundary && district.boundary && <Boundary boundary={district.boundary} />}
 
-      {heat &&
-        ordered.map((issue) => (
-          <Circle
-            key={`heat-${issue.id}`}
-            center={[issue.lat, issue.lng]}
-            radius={30 + issue.votes * 1.4}
-            pathOptions={{ stroke: false, fillColor: '#ef5a1f', fillOpacity: 0.12 }}
-            eventHandlers={{ click: () => onSelect?.(issue) }}
-          />
-        ))}
+      {heat && ordered.map((issue) => <HeatCircle key={`heat-${issue.id}`} issue={issue} onSelect={select} />)}
 
       {ordered.map((issue) => {
         const selected = issue.id === selectedId;
-        const color = STATUSES[issue.status].color;
-        const r = radiusFor(issue, sizeByVotes);
         return (
-          <CircleMarker
+          <IssueMarker
             key={`${issue.id}-${selected}`}
-            center={[issue.lat, issue.lng]}
-            radius={selected ? r + 4 : r}
-            pathOptions={{
-              color: selected ? '#141b2d' : 'white',
-              weight: selected ? 2 : 1.5,
-              dashArray: selected ? '3 3' : undefined,
-              fillColor: color,
-              fillOpacity: 0.95,
-            }}
-            eventHandlers={{ click: () => onSelect?.(issue) }}
-          >
-            {voteLabelsAbove !== undefined && issue.votes >= voteLabelsAbove && (
-              <Tooltip permanent direction="right" offset={[r, 0]} className="vote-label">
-                {issue.votes}
-              </Tooltip>
-            )}
-          </CircleMarker>
+            issue={issue}
+            selected={selected}
+            sizeByVotes={sizeByVotes}
+            label={voteLabelsAbove !== undefined && issue.votes >= voteLabelsAbove}
+            onSelect={select}
+          />
         );
       })}
 

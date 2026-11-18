@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Bell, ChevronUp, LocateFixed, LocateOff, MapPin, Plus, Search, Share, X } from 'lucide-react';
 import IssueMap from '../components/IssueMap';
 import { PhotoThumb, StatusTag } from '../components/ui';
@@ -8,19 +8,19 @@ import type { Category, Issue } from '../data/types';
 import { daysBetween, formatMeters, plural, shortDate } from '../lib/format';
 import type { AddressResult } from '../lib/geocode';
 import { useAddressSearch } from '../lib/useGeocode';
+import { useLatest } from '../lib/useLatest';
+import { useProgressive } from '../lib/useProgressive';
 import { useUserLocation } from '../lib/userLocation';
 import { navigate } from '../router';
 import { useStore } from '../store';
 import { BUTTON, CategoryLabel, LABEL, LINK, shareIssue } from './shared';
 
-export function VoteBox({ issue }: { issue: Issue }) {
-  const { voted, vote } = useStore();
-  const done = voted.includes(issue.id);
+export function VoteBox({ issue, done, onVote }: { issue: Issue; done: boolean; onVote: (id: string) => void }) {
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
-        vote(issue.id, 'map');
+        onVote(issue.id);
       }}
       aria-label={done ? 'You +1’d this' : '+1 this problem'}
       className={`flex w-11 shrink-0 flex-col items-center rounded-lg border py-1.5 text-sm font-semibold transition ${
@@ -33,8 +33,59 @@ export function VoteBox({ issue }: { issue: Issue }) {
   );
 }
 
+/** One open problem in the list. Memoized: a +1 elsewhere, or a toast, doesn't re-render it. */
+const OpenRow = memo(function OpenRow({
+  issue,
+  done,
+  meters,
+  onVote,
+}: {
+  issue: Issue;
+  done: boolean;
+  /** How far the resident is, when known. */
+  meters: number | null;
+  onVote: (id: string) => void;
+}) {
+  return (
+    <li onClick={() => navigate(`/i/${issue.id}`)} className="flex cursor-pointer items-center gap-3 border-t border-slate-100 py-3">
+      <VoteBox issue={issue} done={done} onVote={onVote} />
+      <div className="min-w-0 flex-1">
+        <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
+          {issue.title}
+        </a>
+        <p className="mt-0.5 text-[13px] text-slate-500">
+          <StatusTag status={issue.status} resident className="text-slate-600" /> ·{' '}
+          {meters !== null && meters >= 10 && <>{formatMeters(meters)} away · </>}
+          <span className="whitespace-nowrap">pinned {shortDate(issue.createdAt)}</span>
+        </p>
+      </div>
+      {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-12 w-12 shrink-0 rounded-lg" />}
+    </li>
+  );
+});
+
+const FixedRow = memo(function FixedRow({ issue }: { issue: Issue }) {
+  return (
+    <li onClick={() => navigate(`/i/${issue.id}`)} className="cursor-pointer border-t border-slate-100 py-3">
+      <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
+        {issue.title}
+      </a>
+      <p className="mt-0.5 text-[13px] text-slate-500">
+        <StatusTag status="fixed" resident className="text-slate-600" /> {shortDate(issue.fixedOn!)} ·{' '}
+        <span className="whitespace-nowrap">
+          {issue.notFixed > 0
+            ? `${plural(issue.notFixed, 'neighbor')} ${issue.notFixed === 1 ? 'says' : 'say'} it isn’t`
+            : issue.confirmedFixed > 0
+              ? `${plural(issue.confirmedFixed, 'neighbor')} confirmed`
+              : 'not confirmed yet'}
+        </span>
+      </p>
+    </li>
+  );
+});
+
 export default function MapHome() {
-  const { issues, voted, following, confirmed, lastCreatedId, clearLastCreated, district, track, toast, account } = useStore();
+  const { issues, voted, following, confirmed, lastCreatedId, clearLastCreated, district, track, toast, account, vote } = useStore();
   const [category, setCategory] = useState<Category | 'all'>('all');
   const [sort, setSort] = useState<'votes' | 'newest'>('votes');
   const [query, setQuery] = useState('');
@@ -75,7 +126,7 @@ export default function MapHome() {
     track({ name: 'map_view' });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const active = issues.filter((i) => i.status !== 'fixed');
+  const active = useMemo(() => issues.filter((i) => i.status !== 'fixed'), [issues]);
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return active.filter(
@@ -101,9 +152,19 @@ export default function MapHome() {
       .sort((a, b) => b.fixedOn!.localeCompare(a.fixedOn!) || b.id.localeCompare(a.id));
   }, [issues, category, query]);
 
-  const ranked = [...visible].sort((a, b) =>
-    sort === 'votes' ? b.votes - a.votes : b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+  const ranked = useMemo(
+    () =>
+      [...visible].sort((a, b) =>
+        sort === 'votes' ? b.votes - a.votes : b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      ),
+    [visible, sort],
   );
+  // The list mounts a page of rows at a time; the map still shows every match.
+  const list = useProgressive(ranked, `${category}|${sort}|${query.trim()}`);
+  const votedSet = useMemo(() => new Set(voted), [voted]);
+  // `vote` is a new function after every store change; the rows only need one that calls the latest.
+  const latestVote = useLatest(vote);
+  const onVote = useCallback((id: string) => void latestVote.current(id, 'map'), [latestVote]);
   const created = lastCreatedId ? issues.find((i) => i.id === lastCreatedId) : undefined;
   // A fresh pin centers the map when it opens; after that, searches and "locate me" take over.
   const flyTo = target ?? (created ? { lat: created.lat, lng: created.lng } : undefined);
@@ -317,53 +378,27 @@ export default function MapHome() {
         </div>
 
         <ul className="flex-1 overflow-y-auto px-5 pb-4">
-          {ranked.map((issue) => (
-            <li
+          {list.shown.map((issue) => (
+            <OpenRow
               key={issue.id}
-              onClick={() => navigate(`/i/${issue.id}`)}
-              className="flex cursor-pointer items-center gap-3 border-t border-slate-100 py-3"
-            >
-              <VoteBox issue={issue} />
-              <div className="min-w-0 flex-1">
-                <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
-                  {issue.title}
-                </a>
-                <p className="mt-0.5 text-[13px] text-slate-500">
-                  <StatusTag status={issue.status} resident className="text-slate-600" /> ·{' '}
-                  {you && distanceMeters(you, issue) >= 10 && <>{formatMeters(distanceMeters(you, issue))} away · </>}
-                  <span className="whitespace-nowrap">pinned {shortDate(issue.createdAt)}</span>
-                </p>
-              </div>
-              {issue.photos.length > 0 && <PhotoThumb issue={issue} className="h-12 w-12 shrink-0 rounded-lg" />}
-            </li>
+              issue={issue}
+              done={votedSet.has(issue.id)}
+              meters={you ? distanceMeters(you, issue) : null}
+              onVote={onVote}
+            />
           ))}
+          {list.more && <li ref={list.sentinel} aria-hidden className="h-px" />}
           {!ranked.length && (
             <li className="py-8 text-center text-sm text-slate-500">
               {active.length ? 'No open problems match.' : 'No open problems right now.'}
             </li>
           )}
-          {fixedLately.length > 0 && (
+          {!list.more && fixedLately.length > 0 && (
             <li className="border-t border-slate-100 pb-1 pt-4">
               <h3 className={LABEL}>Fixed in the last 30 days</h3>
             </li>
           )}
-          {fixedLately.map((issue) => (
-            <li key={issue.id} onClick={() => navigate(`/i/${issue.id}`)} className="cursor-pointer border-t border-slate-100 py-3">
-              <a href={`#/i/${issue.id}`} className="block font-semibold leading-snug">
-                {issue.title}
-              </a>
-              <p className="mt-0.5 text-[13px] text-slate-500">
-                <StatusTag status="fixed" resident className="text-slate-600" /> {shortDate(issue.fixedOn!)} ·{' '}
-                <span className="whitespace-nowrap">
-                  {issue.notFixed > 0
-                    ? `${plural(issue.notFixed, 'neighbor')} ${issue.notFixed === 1 ? 'says' : 'say'} it isn’t`
-                    : issue.confirmedFixed > 0
-                      ? `${plural(issue.confirmedFixed, 'neighbor')} confirmed`
-                      : 'not confirmed yet'}
-                </span>
-              </p>
-            </li>
-          ))}
+          {!list.more && fixedLately.map((issue) => <FixedRow key={issue.id} issue={issue} />)}
         </ul>
       </div>
     </div>

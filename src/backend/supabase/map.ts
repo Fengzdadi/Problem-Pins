@@ -13,7 +13,7 @@ import type {
   Status,
 } from '../../data/types';
 import { nyDate } from '../../lib/format';
-import type { Snapshot } from '../types';
+import type { Snapshot, SnapshotChanges } from '../types';
 
 // Row shapes returned by the database (see supabase/migrations), and their mapping to the
 // domain model. Timestamps become New York calendar dates.
@@ -107,6 +107,17 @@ export interface SnapshotRow {
   issues: IssueRow[];
   scan_points: ScanPointRow[];
   me: { voted: string[]; following: string[]; confirmed: Record<string, 'yes' | 'no'>; reported?: string[] };
+  /** For get_changes: the oldest transaction still running when this was read. */
+  cursor?: string;
+  /** New York date of the read (`YYYY-MM-DD`); "this week" counts depend on it. */
+  today?: string;
+}
+
+/** get_changes: like a snapshot, with only the changed issues, and the ones this viewer lost. */
+export interface ChangesRow extends SnapshotRow {
+  removed: string[];
+  /** Set (and nothing else) when only a whole snapshot will do: the cursor was read as staff and the caller no longer is, or the other way round. */
+  reload?: boolean;
 }
 
 export interface EventRow {
@@ -212,14 +223,20 @@ export function mapScanPoint(row: ScanPointRow): ScanPoint {
   };
 }
 
-export function mapSnapshot(row: SnapshotRow, photoUrl?: (name: string) => string): Snapshot {
+/** `cursor` is what the app passes back to get_changes (the backend adds who it was read for). */
+export function mapSnapshot(row: SnapshotRow, photoUrl?: (name: string) => string, cursor = row.cursor ?? ''): Snapshot {
   const district = mapDistrict(row.district);
   return {
     district,
     issues: row.issues.map((i) => mapIssue(i, district.name, photoUrl)),
     scanPoints: row.scan_points.map(mapScanPoint),
     me: { voted: row.me.voted, following: row.me.following, confirmed: row.me.confirmed, reported: row.me.reported ?? [] },
+    cursor,
   };
+}
+
+export function mapChanges(row: ChangesRow, photoUrl?: (name: string) => string, cursor = row.cursor ?? ''): SnapshotChanges {
+  return { ...mapSnapshot(row, photoUrl, cursor), removed: row.removed ?? [] };
 }
 
 export function mapEvent(row: EventRow): AnalyticsEvent {

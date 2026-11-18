@@ -18,7 +18,8 @@ import type {
  *
  * Two implementations: `demo.ts` (sample data in localStorage, frozen date) and
  * `supabase/` (shared Postgres, real dates). The UI never talks to a backend directly;
- * it goes through the store, which reloads the snapshot after every mutation.
+ * it goes through the store, which loads a snapshot once and then asks for what changed
+ * (`loadChanges`) after every mutation and change ping.
  *
  * Rules every implementation follows:
  * - Mutations resolve when the change is saved and reject with an `Error` whose message
@@ -32,8 +33,16 @@ import type {
 export interface Backend {
   readonly mode: DataMode;
 
-  /** Everything the app shows. Called on start, after every mutation and on change pings. */
+  /** Everything the app shows. Called on start and when the viewer changes (sign-in, sign-out). */
   load(): Promise<Snapshot>;
+  /**
+   * What changed since `cursor` (from `load` or an earlier `loadChanges`), for the same viewer.
+   * Called after every mutation and on change pings. Resolves to null when only a whole snapshot
+   * will do (the viewer, their staff rights or the day changed; an unknown cursor): the store then
+   * calls `load`.
+   * May return an issue that didn't change; never leaves out one that did.
+   */
+  loadChanges(cursor: string): Promise<SnapshotChanges | null>;
   /** Calls `onChange` when data changed elsewhere (another device, staff). Returns unsubscribe. */
   subscribe(onChange: () => void): () => void;
 
@@ -121,6 +130,20 @@ export interface Snapshot {
   issues: Issue[];
   scanPoints: ScanPoint[];
   me: MyState;
+  /** Opaque; pass it to `loadChanges`. */
+  cursor: string;
+}
+
+/** The answer to `loadChanges`: the small parts in full, and only the issues that changed. */
+export interface SnapshotChanges {
+  district: District;
+  /** Issues added or changed since the cursor, in full, as `load` would return them. */
+  issues: Issue[];
+  /** Issues this viewer could see before and no longer can (e.g. hidden by staff). */
+  removed: string[];
+  scanPoints: ScanPoint[];
+  me: MyState;
+  cursor: string;
 }
 
 export interface NewIssueDraft {

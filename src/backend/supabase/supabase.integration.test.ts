@@ -60,6 +60,8 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
   }
 
   const find = async (b: Backend, id: string) => (await b.load()).issues.find((i) => i.id === id);
+  // A fresh device per test that pins: one device may pin only 10 times an hour.
+  const carolFor = () => backend();
 
   beforeAll(async () => {
     admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -466,6 +468,90 @@ describe.skipIf(!stack)('Supabase backend (local stack)', { timeout: 20000 }, ()
     await alice.comment(pinned, 'Still broken.');
     await real;
     unsubscribe();
+  });
+
+  it('sends only what changed since a cursor, as each viewer may see it', async () => {
+    const carol = backend();
+    const id = await carol.createIssue(draft('Bench broken', { category: 'other' }));
+    const start = await bob.load();
+    const staffStart = await staffA.load();
+
+    // Nothing changed: no issues, the small parts in full.
+    const none = (await bob.loadChanges(start.cursor))!;
+    expect(none.issues).toEqual([]);
+    expect(none.removed).toEqual([]);
+    expect(none.me).toEqual(start.me);
+    expect(none.district).toEqual(start.district);
+
+    // Another device's +1 and a staff update: that issue, exactly as a whole snapshot shows it.
+    await alice.vote(id);
+    await staffA.postUpdate(id, 'On it.');
+    const some = (await bob.loadChanges(none.cursor))!;
+    expect(some.issues.map((i) => i.id)).toEqual([id]);
+    expect(some.issues[0]).toEqual(await find(bob, id));
+    expect(some.issues[0].updates.at(-1)!.staffName).toBeUndefined();
+    const forStaff = (await staffA.loadChanges(staffStart.cursor))!;
+    expect(forStaff.issues.find((i) => i.id === id)!.updates.at(-1)!.staffName).toBe('Avery');
+
+    // This device's own +1 comes back in the issue and in `me`.
+    await bob.vote(id);
+    const mine = (await bob.loadChanges(some.cursor))!;
+    expect(mine.issues.map((i) => i.id)).toEqual([id]);
+    expect(mine.issues[0].votes).toBe(3);
+    expect(mine.me.voted).toContain(id);
+
+    // Taking a +1 back is a change too (the vote row is deleted).
+    await bob.unvote(id);
+    const undone = (await bob.loadChanges(mine.cursor))!;
+    expect(undone.issues[0].votes).toBe(2);
+    expect(undone.me.voted).not.toContain(id);
+
+    // Hidden: gone for residents, by id only; still there for staff.
+    await staffA.hideIssue(id, 'Duplicate');
+    const hidden = (await bob.loadChanges(undone.cursor))!;
+    expect(hidden.issues).toEqual([]);
+    expect(hidden.removed).toEqual([id]);
+    const staffHidden = (await staffA.loadChanges(forStaff.cursor))!;
+    expect(staffHidden.issues.find((i) => i.id === id)).toMatchObject({ hidden: true, hiddenReason: 'Duplicate' });
+    expect(staffHidden.removed).toEqual([]);
+
+    // A merge changes the issue it went into: one more duplicate.
+    const into = await carol.createIssue(draft('Bins full', { category: 'litter' }));
+    const dup = await carol.createIssue(draft('Trash piling up', { category: 'litter' }));
+    const beforeMerge = await bob.load();
+    await staffA.mergeIssue(dup, into);
+    const merged = (await bob.loadChanges(beforeMerge.cursor))!;
+    expect(merged.issues.find((i) => i.id === into)).toMatchObject({ duplicatesMerged: 1 });
+    expect(merged.issues.find((i) => i.id === dup)).toMatchObject({ mergedInto: into });
+
+    // Changes in another district aren't sent.
+    const quiet = (await bob.loadChanges(merged.cursor))!;
+    await staffB.saveScanPoint({ code: `Z${run.slice(0, 4).toUpperCase()}`, name: 'Elsewhere', detail: '', lat: 40.735, lng: -73.995 });
+    expect((await bob.loadChanges(quiet.cursor))!.issues).toEqual([]);
+
+    // Another viewer's cursor, or a made-up one: a whole snapshot instead.
+    expect(await alice.loadChanges(quiet.cursor)).toBeNull();
+    expect(await bob.loadChanges('not-a-cursor')).toBeNull();
+    const reader = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    for (const since of ['bogus', '12:x', '', '99999999999999999999999:r']) {
+      expect((await reader.rpc('get_changes', { p_district: A, p_since: since })).data).toEqual({ reload: true });
+    }
+  });
+
+  it('loads everything again when staff rights change under the same sign-in', async () => {
+    const dana = await makeStaff(A, 'Dana');
+    const id = await carolFor().createIssue(draft('Graffiti on the wall', { category: 'other' }));
+    await staffA.hideIssue(id, 'Spam');
+    const asStaff = await dana.load();
+    expect(asStaff.issues.find((i) => i.id === id)).toMatchObject({ hidden: true });
+
+    // An admin removes Dana's staff row while Dana stays signed in.
+    const { data } = await admin.from('staff').select('user_id').eq('district_id', A).eq('name', 'Dana').single();
+    await admin.from('staff').delete().eq('user_id', data!.user_id).eq('district_id', A);
+    expect(await dana.loadChanges(asStaff.cursor)).toBeNull();
+    const after = await dana.load();
+    expect(after.issues.find((i) => i.id === id)).toBeUndefined();
+    expect(after.issues.every((i) => !i.reports && i.updates.every((u) => !u.staffName))).toBe(true);
   });
 
   it('restores the resident identity when staff sign out', async () => {

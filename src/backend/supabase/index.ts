@@ -11,7 +11,7 @@ import type {
   Status,
 } from '../../data/types';
 import type { Backend, NewIssueDraft, Snapshot } from '../types';
-import { mapEvent, mapSnapshot, toError, toUploadError, type EventRow, type SnapshotRow } from './map';
+import { mapChanges, mapEvent, mapSnapshot, toError, toUploadError, type ChangesRow, type EventRow, type SnapshotRow } from './map';
 
 /**
  * Live backend on Supabase (Postgres + Auth + Storage + Realtime). The database side lives in
@@ -183,6 +183,9 @@ export function createSupabaseBackend(config: SupabaseConfig, options: SupabaseB
   const photoUrl = (name: string) => photos.getPublicUrl(name).data.publicUrl;
   const photoName = (url: string) => url.slice(url.lastIndexOf('/') + 1);
 
+  /** The database's cursor, the day it was read and who read it (all three must match for get_changes). */
+  const cursorFor = (row: SnapshotRow, session: Session | null) => `${row.cursor ?? ''}|${row.today ?? ''}|${session?.user.id ?? ''}`;
+
   // The client hands back a channel that is still leaving if the same topic is joined again,
   // so a new subscription waits until the previous one has left.
   let leaving: Promise<unknown> = Promise.resolve();
@@ -191,19 +194,45 @@ export function createSupabaseBackend(config: SupabaseConfig, options: SupabaseB
     mode: 'live',
 
     async load(): Promise<Snapshot> {
-      // Reading works without a session (e.g. if anonymous sign-in is rate limited).
-      const session = await ensureSession().catch((error) => {
-        console.warn('Problem Pins: reading without a session', error);
-        return null;
-      });
-      const [{ data, error }, account] = await Promise.all([
+      // A device with a session reads as itself. A new device reads while it signs in: until it has
+      // done something it sees what anyone sees, so the read doesn't wait for the sign-in. Reading
+      // also works without a session (e.g. if anonymous sign-in is rate limited).
+      const existing = await currentSession().catch(() => null);
+      const session = existing
+        ? Promise.resolve(existing)
+        : ensureSession().catch((error) => {
+            console.warn('Problem Pins: reading without a session', error);
+            return null;
+          });
+      const [{ data, error }, account, signedIn] = await Promise.all([
         supabase.rpc('get_snapshot', { p_district: districtId }),
+        residentAccount(existing),
+        session,
+      ]);
+      if (error) throw toError(error);
+      const row = data as SnapshotRow;
+      const snapshot = mapSnapshot(row, photoUrl, cursorFor(row, signedIn));
+      if (account) snapshot.me.account = account;
+      return snapshot;
+    },
+
+    async loadChanges(cursor: string) {
+      const [since, today, viewer] = cursor.split('|');
+      if (!since) return null;
+      // What a viewer may see depends on who it is: after a sign-in or sign-out, a whole snapshot.
+      const session = await currentSession().catch(() => null);
+      if ((session?.user.id ?? '') !== viewer) return null;
+      const [{ data, error }, account] = await Promise.all([
+        supabase.rpc('get_changes', { p_district: districtId, p_since: since }),
         residentAccount(session),
       ]);
       if (error) throw toError(error);
-      const snapshot = mapSnapshot(data as SnapshotRow, photoUrl);
-      if (account) snapshot.me.account = account;
-      return snapshot;
+      const row = data as ChangesRow;
+      // Staff rights changed, or "this week" counts moved on with the date on issues nobody touched.
+      if (row.reload || row.today !== today) return null;
+      const changes = mapChanges(row, photoUrl, cursorFor(row, session));
+      if (account) changes.me.account = account;
+      return changes;
     },
 
     subscribe(onChange) {

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createBackend, type Backend, type NewIssueDraft, type Snapshot } from './backend';
+import { applyChanges, optimisticFollow, optimisticVote, type Optimistic } from './backend/changes';
 import type { DataMode } from './config';
 import type {
   AnalyticsEvent,
@@ -15,9 +16,10 @@ import type {
 } from './data/types';
 
 /**
- * The one place screens get data and actions from. It holds the latest backend snapshot,
- * reloads it after every mutation (and when the backend pings a change), and turns errors
- * into toasts. Actions resolve to `true` on success and never throw.
+ * The one place screens get data and actions from. It holds the latest backend snapshot and
+ * asks the backend what changed after every mutation (and when the backend pings a change),
+ * keeping the objects of issues that didn't change so screens re-render only what did. It
+ * turns errors into toasts. Actions resolve to `true` on success and never throw.
  */
 interface Store {
   mode: DataMode;
@@ -92,7 +94,21 @@ function message(error: unknown) {
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [backend, setBackend] = useState<Backend | null>(null);
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [snapshot, setSnapshotState] = useState<Snapshot | null>(null);
+  // The snapshot as of the last change, for merging what `loadChanges` returns into it.
+  const latest = useRef<Snapshot | null>(null);
+  const setSnapshot = useCallback((next: Snapshot | null) => {
+    latest.current = next;
+    setSnapshotState(next);
+  }, []);
+  // Optimistic changes whose mutation hasn't been answered yet, applied again to every snapshot
+  // that arrives meanwhile (`Optimistic` in src/backend/changes.ts).
+  const pending = useRef(new Map<number, Optimistic>());
+  const pendingSeq = useRef(0);
+  const fromServer = useCallback(
+    (next: Snapshot) => setSnapshot([...pending.current.values()].reduce((s, fn) => fn(s), next)),
+    [setSnapshot],
+  );
   const [staff, setStaff] = useState<StaffUser | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
@@ -107,11 +123,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     toastTimer.current = window.setTimeout(() => setToastMessage(null), 2800);
   }, []);
 
-  const reload = useCallback(async (b: Backend) => {
-    const seq = ++loadSeq.current;
-    const next = await b.load();
-    if (seq === loadSeq.current) setSnapshot(next); // ignore out-of-order responses
-  }, []);
+  /**
+   * Brings the snapshot up to date: only what changed, unless `full` or the backend says only a
+   * whole snapshot will do (the viewer or the day changed). Out-of-order responses are ignored.
+   */
+  const reload = useCallback(
+    async (b: Backend, full = false) => {
+      const seq = ++loadSeq.current;
+      const cursor = full ? null : latest.current?.cursor;
+      // If asking for changes fails, a whole snapshot may still work (and fails the same way if not).
+      const changes = cursor ? await b.loadChanges(cursor).catch(() => null) : null;
+      if (changes) {
+        if (seq === loadSeq.current && latest.current) fromServer(applyChanges(latest.current, changes));
+        return;
+      }
+      const next = await b.load();
+      if (seq === loadSeq.current) fromServer(next);
+    },
+    [fromServer],
+  );
 
   // Start: pick the backend, load data and the staff session, listen for changes.
   useEffect(() => {
@@ -125,19 +155,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setStaff(signedIn);
         setBackend(b);
+        // Catch up at most once per second however many pings arrive: a burst of changes (or a
+        // flood) costs one small read of what changed per second per open app.
+        const soon = () => {
+          if (refreshTimer.current !== undefined) return;
+          refreshTimer.current = window.setTimeout(() => {
+            refreshTimer.current = undefined;
+            void reload(b).catch(() => {});
+          }, 1000);
+        };
+        // Back in front (a phone that slept, a staff tab left open overnight): catch up, which
+        // also notices a new day ("this week" counts change without any record changing).
+        const onVisible = () => {
+          if (document.visibilityState === 'visible') soon();
+        };
+        document.addEventListener('visibilitychange', onVisible);
         cleanups = [
-          // Reload at most once per second however many pings arrive: a burst of changes
-          // (or a flood) costs one snapshot per second per open app, and updates still arrive.
-          b.subscribe(() => {
-            if (refreshTimer.current !== undefined) return;
-            refreshTimer.current = window.setTimeout(() => {
-              refreshTimer.current = undefined;
-              void reload(b).catch(() => {});
-            }, 1000);
-          }),
+          b.subscribe(soon),
+          () => document.removeEventListener('visibilitychange', onVisible),
           b.onAuthChange((s) => {
             setStaff(s);
-            void reload(b).catch(() => {});
+            void reload(b, true).catch(() => {});
           }),
         ];
       } catch (error) {
@@ -152,35 +190,53 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, [reload]);
 
+  // Derived once per snapshot, not on every toast: screens memoize on these arrays.
+  const issues = snapshot?.issues;
+  const lists = useMemo(() => {
+    const all = issues ?? [];
+    return {
+      visible: all.filter((i) => !i.hidden && !i.mergedInto),
+      hidden: all.filter((i) => i.hidden || i.mergedInto),
+      byId: new Map(all.map((i) => [i.id, i])),
+    };
+  }, [issues]);
+
   const store = useMemo<Store | null>(() => {
     if (!backend || !snapshot) return null;
     const b = backend;
 
-    /** Runs a mutation, reloads, and reports failure as a toast. */
-    const run = async (fn: () => Promise<unknown>, event?: Omit<AnalyticsEvent, 'at'>) => {
+    /**
+     * Runs a mutation, reloads what changed, and reports failure as a toast. `optimistic` is shown
+     * at once and kept until the mutation is answered. A failed one reloads everything: an
+     * optimistic change to an issue the server didn't change wouldn't be sent back.
+     */
+    const run = async (fn: () => Promise<unknown>, event?: Omit<AnalyticsEvent, 'at'>, optimistic?: Optimistic) => {
+      const key = ++pendingSeq.current;
+      if (optimistic && latest.current) {
+        pending.current.set(key, optimistic);
+        setSnapshot(optimistic(latest.current));
+      }
       try {
         await fn();
-        if (event) b.track(event);
-        await reload(b);
-        return true;
       } catch (error) {
+        pending.current.delete(key);
         toast(message(error));
-        await reload(b).catch(() => {});
+        await reload(b, true).catch(() => {});
         return false;
       }
+      // Saved. If reading it back fails (offline for a moment), the next ping or action catches up.
+      if (event) b.track(event);
+      await reload(b)
+        .catch(() => {})
+        .finally(() => pending.current.delete(key));
+      return true;
     };
-
-    /** Optimistic local change for snappy +1/follow; the reload after the mutation corrects it. */
-    const patch = (id: string, fn: (s: Snapshot) => Snapshot) =>
-      setSnapshot((s) => (s && s.issues.some((i) => i.id === id) ? fn(s) : s));
-
-    const visible = snapshot.issues.filter((i) => !i.hidden && !i.mergedInto);
 
     return {
       mode: b.mode,
       district: snapshot.district,
-      issues: visible,
-      hiddenIssues: snapshot.issues.filter((i) => i.hidden || i.mergedInto),
+      issues: lists.visible,
+      hiddenIssues: lists.hidden,
       scanPoints: snapshot.scanPoints,
       voted: snapshot.me.voted,
       following: snapshot.me.following,
@@ -192,57 +248,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       toastMessage,
       toast,
       clearLastCreated: () => setLastCreatedId(null),
-      getIssue: (id) => snapshot.issues.find((i) => i.id === id),
+      getIssue: (id) => lists.byId.get(id),
       refresh: () => reload(b),
 
       vote: (id, source) => {
         if (snapshot.me.voted.includes(id)) return Promise.resolve(true);
-        patch(id, (s) => ({
-          ...s,
-          me: { ...s.me, voted: [...s.me.voted, id] },
-          issues: s.issues.map((i) => (i.id === id ? { ...i, votes: i.votes + 1, votesThisWeek: i.votesThisWeek + 1 } : i)),
-        }));
-        return run(() => b.vote(id), { name: 'vote', issueId: id, props: source ? { source } : undefined });
+        return run(() => b.vote(id), { name: 'vote', issueId: id, props: source ? { source } : undefined }, optimisticVote(id, true));
       },
 
       unvote: (id) => {
         if (!snapshot.me.voted.includes(id)) return Promise.resolve(true);
-        patch(id, (s) => ({
-          ...s,
-          me: { ...s.me, voted: s.me.voted.filter((v) => v !== id) },
-          issues: s.issues.map((i) =>
-            i.id === id ? { ...i, votes: Math.max(0, i.votes - 1), votesThisWeek: Math.max(0, i.votesThisWeek - 1) } : i,
-          ),
-        }));
-        return run(() => b.unvote(id));
+        return run(() => b.unvote(id), undefined, optimisticVote(id, false));
       },
 
-      follow: (id, contact) => {
-        const already = snapshot.me.following.includes(id);
-        if (!already) {
-          patch(id, (s) => ({
-            ...s,
-            me: { ...s.me, following: [...s.me.following, id] },
-            issues: s.issues.map((i) => (i.id === id ? { ...i, following: i.following + 1 } : i)),
-          }));
-        }
-        return run(() => b.follow(id, contact), {
-          name: 'follow',
-          issueId: id,
-          props: { contact: contact?.email ? 'email' : contact?.phone ? 'phone' : 'none' },
-        });
-      },
+      follow: (id, contact) =>
+        run(
+          () => b.follow(id, contact),
+          { name: 'follow', issueId: id, props: { contact: contact?.email ? 'email' : contact?.phone ? 'phone' : 'none' } },
+          optimisticFollow(id, true),
+        ),
 
-      unfollow: (id) => {
-        if (snapshot.me.following.includes(id)) {
-          patch(id, (s) => ({
-            ...s,
-            me: { ...s.me, following: s.me.following.filter((f) => f !== id) },
-            issues: s.issues.map((i) => (i.id === id ? { ...i, following: Math.max(0, i.following - 1) } : i)),
-          }));
-        }
-        return run(() => b.unfollow(id));
-      },
+      unfollow: (id) => run(() => b.unfollow(id), undefined, optimisticFollow(id, false)),
 
       addIssue: async (draft, photos = []) => {
         try {
@@ -324,7 +350,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setLastCreatedId(null);
         }),
     };
-  }, [backend, snapshot, staff, lastCreatedId, toastMessage, toast, reload]);
+  }, [backend, snapshot, lists, staff, lastCreatedId, toastMessage, toast, reload, setSnapshot]);
 
   if (loadError) return <StartupScreen error={loadError} />;
   if (!store) return <StartupScreen />;
