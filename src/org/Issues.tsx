@@ -221,10 +221,12 @@ function CityCard({ issue, todo }: { issue: Issue; todo: TodoItem | null }) {
     const wait = cityWait(req, day);
     // Orange by the to-do list's rule: no contact with the City for `cityNoReplyDays` or more.
     const late = daysBetween(req.lastFollowUp ?? req.sentOn, day) >= district.rules.cityNoReplyDays;
+    const routed = req.routedTo?.trim() ?? '';
+    const unit = routed.startsWith(`${req.agency} · `) ? routed.slice(req.agency.length + 3) : routed === req.agency ? '' : routed;
     const rows: [string, string, string?][] = [
       ['Filed', req.sentBy ? `${shortDate(req.sentOn)} by ${req.sentBy}` : shortDate(req.sentOn)],
-      ['Agency', req.agency],
-      ...(req.routedTo && req.routedTo !== req.agency ? [['Routed to', req.routedTo] as [string, string]] : []),
+      // The unit it was routed to goes on the agency's line ("NYC Parks · Forestry"), not on a second line that names the agency again.
+      ['Agency', unit ? `${req.agency} · ${unit}` : req.agency],
       ['Last follow-up', req.lastFollowUp ? shortDate(req.lastFollowUp) : 'None yet'],
       // When the to-do line above already gives this wait, it isn't said twice.
       ...(waiting && todo?.kind !== 'city'
@@ -388,12 +390,15 @@ const ListRow = memo(function ListRow({
   urgent,
   current,
   href,
+  showStatus,
 }: {
   issue: Issue;
   note?: string;
   urgent: boolean;
   current: boolean;
   href: string;
+  /** Off in a tab where every row has the same status, which the tab's name already says. */
+  showStatus: boolean;
 }) {
   return (
     <li>
@@ -417,7 +422,7 @@ const ListRow = memo(function ListRow({
         <span className="block font-medium">{i.title}</span>
         <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
           <CategoryTag category={i.category} />
-          <StatusTag status={i.status} />
+          {showStatus && <StatusTag status={i.status} />}
           <span className="text-slate-500">{plural(i.votes, 'neighbor')}</span>
         </span>
         {note && <span className={`mt-1 block truncate text-xs ${urgent ? 'font-medium text-brand-dark' : 'text-slate-500'}`}>{note}</span>}
@@ -464,8 +469,8 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
   const missing = Boolean(selectedId && !store.getIssue(selectedId));
   const issue = selectedId ? store.getIssue(selectedId) : fallback;
   const todo = issue ? todoFor(issue, rules, day) : null;
-  const base = activeTab.id === 'city' ? '/org/sent' : '/org/issues';
-  const tabQuery = activeTab.id !== 'inbox' && activeTab.id !== 'city' ? `?tab=${activeTab.id}` : '';
+  const base = '/org/issues';
+  const tabQuery = activeTab.id !== 'inbox' ? `?tab=${activeTab.id}` : '';
   const linkFor = (id: string) => `${base}/${id}${tabQuery}`;
   const startCompose = (status?: Status) => setCompose((c) => ({ status, n: (c?.n ?? 0) + 1 }));
   // Phones show the list or one issue, never both. `selectedId` decides which.
@@ -498,7 +503,7 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
               key={t.id}
               onClick={() => {
                 setQuery('');
-                navigate(t.id === 'city' ? '/org/sent' : `/org/issues?tab=${t.id}`);
+                navigate(`/org/issues?tab=${t.id}`);
               }}
               aria-current={!searching && t.id === activeTab.id ? 'page' : undefined}
               className={`shrink-0 whitespace-nowrap border-b-2 pb-2.5 -outline-offset-2 ${
@@ -526,6 +531,7 @@ export default function Issues({ selectedId, tab }: { selectedId?: string; tab: 
               urgent={Boolean(note?.urgent)}
               current={issue?.id === i.id}
               href={linkFor(i.id)}
+              showStatus={searching || (activeTab.id !== 'city' && activeTab.id !== 'fixed')}
             />
           ))}
           {list.more && <li ref={list.sentinel} aria-hidden className="h-px" />}

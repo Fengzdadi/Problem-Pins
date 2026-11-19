@@ -7,25 +7,22 @@ import {
   Map as MapIcon,
   Menu,
   QrCode,
-  Send,
   SlidersHorizontal,
   X,
   type LucideIcon,
 } from 'lucide-react';
 import { Logo } from '../components/ui';
-import { today } from '../lib/format';
 import { navigate } from '../router';
 import { useStore } from '../store';
-import { cityFigures } from './dashboard';
 import SettingsDialog from './Settings';
 
-export type OrgSection = 'overview' | 'issues' | 'map' | 'reports' | 'sent' | 'qr';
+export type OrgSection = 'overview' | 'issues' | 'map' | 'reports' | 'qr';
 
 /**
  * Dashboard frame: a sidebar from `md` up, a compact top bar with a slide-in menu on phones.
  */
 export default function OrgShell({ active, children }: { active: OrgSection; children: ReactNode }) {
-  const { issues, district, staff, signOut, toast } = useStore();
+  const { district, staff, signOut, toast } = useStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -38,15 +35,12 @@ export default function OrgShell({ active, children }: { active: OrgSection; chi
     .join('')
     .slice(0, 2)
     .toUpperCase();
-  // The same count as "Waiting on the City" on the Overview.
-  const waitingOnCity = cityFigures(issues, today()).count;
-
-  const items: { id: OrgSection; label: string; Icon: LucideIcon; to: string; count?: number }[] = [
+  // One entry per page. What waits on the City is a tab of Issues, reached from the Overview's figure too.
+  const items: { id: OrgSection; label: string; Icon: LucideIcon; to: string }[] = [
     { id: 'overview', label: 'Overview', Icon: LayoutGrid, to: '/org' },
     { id: 'issues', label: 'Issues', Icon: Inbox, to: '/org/issues' },
     { id: 'map', label: 'Map', Icon: MapIcon, to: '/org/map' },
     { id: 'reports', label: 'Reports', Icon: FileText, to: '/org/reports' },
-    { id: 'sent', label: 'Waiting on the City', Icon: Send, to: '/org/sent', count: waitingOnCity },
     { id: 'qr', label: 'QR posters', Icon: QrCode, to: '/org/qr' },
   ];
   const current = items.find((i) => i.id === active);
@@ -58,7 +52,7 @@ export default function OrgShell({ active, children }: { active: OrgSection; chi
 
   const nav = (
     <nav className="space-y-0.5">
-      {items.map(({ id, label, Icon, to, count }) => (
+      {items.map(({ id, label, Icon, to }) => (
         <button
           key={id}
           onClick={() => go(to)}
@@ -69,7 +63,6 @@ export default function OrgShell({ active, children }: { active: OrgSection; chi
         >
           <Icon className="h-4 w-4" />
           <span className="flex-1 text-left">{label}</span>
-          {count !== undefined && <span className="text-xs text-slate-400">{count}</span>}
         </button>
       ))}
     </nav>

@@ -123,7 +123,7 @@ Every screen follows these. The shared classes are in `src/components/ui.tsx` (`
 | `#/updates` | `resident/Updates` | (shared, wave 2: notifications) |
 | `#/about` | `resident/About`: who runs it, what happens to a pin, what is public | (shared) |
 | `#/account?next=&from=` | `resident/Account`: optional resident account. Signed out: email, then a 6-digit code (the demo shows it; "Use it" signs in), then back to `next` (resident paths only, default `/updates`). Signed in: the email, what is saved, how another phone works, who sees the email, Sign out and Delete account (confirmed in place). `from` is the analytics source (`updates`, `new_pin`, `about`, `demo`). Hidden behind `residentAccounts` in `src/config.ts` | (shared) |
-| `#/org` `#/org/issues/:id` `#/org/map` `#/org/sent` | `org/*` | staff-app |
+| `#/org` `#/org/issues/:id?tab=` `#/org/map` | `org/*`. `#/org/sent` is the old address of `#/org/issues?tab=city` and still opens it | staff-app |
 | `#/org/reports?month=` | `org/Reports` | qr-analytics |
 | `#/org/experiments` | `org/Experiments`: the Problem Pins team's experiment results. Not in the sidebar; Reports links to it in demo mode only | qr-analytics |
 | `#/org/qr` | `org/QrPosters` | qr-analytics |

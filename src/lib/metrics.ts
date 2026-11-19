@@ -71,12 +71,19 @@ export interface MonthReport {
   sentToCity: number;
   /** Of those, how many are still waiting on the City. */
   sentStillWaiting: number;
+  /** Still open on the last day counted (`through`): pinned by then and not fixed by then. */
+  open: number;
+  /** Of those, how many had been open for more than `OPEN_LONG_DAYS` on that day. */
+  openLong: number;
   byCategory: CategoryFigures[];
   /** Most-pinned category this month (ties: the order of `categories`). */
   topCategory: { category: Category; pinned: number } | null;
   /** Hidden by staff (spam, off-topic): left out of every figure. */
   hidden: number;
 }
+
+/** An open problem older than this many days is called out in the report. */
+export const OPEN_LONG_DAYS = 30;
 
 /**
  * Figures for one month. Pins count every report made that month, including ones later
@@ -101,11 +108,14 @@ export function monthReport(issues: Issue[], month: string, today: string, categ
   });
   const top = byCategory.reduce<CategoryFigures | null>((best, c) => (c.pinned > (best?.pinned ?? 0) ? c : best), null);
   const partial = monthOf(today) === month;
+  const through = partial ? today : `${month}-${String(daysInMonth(month)).padStart(2, '0')}`;
+  // The backlog on the last day counted. A fix made after that day doesn't take a problem out of it.
+  const open = counted.filter((i) => !i.mergedInto && i.createdAt <= through && !(i.status === 'fixed' && (i.fixedOn ?? '') <= through));
 
   return {
     month,
     partial,
-    through: partial ? today : `${month}-${String(daysInMonth(month)).padStart(2, '0')}`,
+    through,
     pinned: pinned.length,
     pinnedPrev: counted.filter((i) => monthOf(i.createdAt) === shiftMonth(month, -1)).length,
     fixed: fixed.length,
@@ -113,6 +123,8 @@ export function monthReport(issues: Issue[], month: string, today: string, categ
     medianDaysToFix: fixed.length ? median(days(fixed)) : null,
     sentToCity: sent.length,
     sentStillWaiting: sent.filter((i) => i.status === 'sent_to_city').length,
+    open: open.length,
+    openLong: open.filter((i) => daysBetween(i.createdAt, through) > OPEN_LONG_DAYS).length,
     byCategory,
     topCategory: top ? { category: top.category, pinned: top.pinned } : null,
     hidden: issues.filter((i) => i.hidden && inMonth(i.createdAt)).length,

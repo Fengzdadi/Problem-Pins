@@ -221,7 +221,8 @@ export default function App() {
   if (isOrg && seg[1] === 'login') {
     content = <Login next={query.get('next')} />;
   } else if (isOrg) {
-    const section = (seg[1] ?? 'overview') as OrgSection | 'experiments';
+    // `sent` is the old address of the Issues tab for what waits on the City.
+    const section = (seg[1] ?? 'overview') as OrgSection | 'experiments' | 'sent';
     let page;
     switch (section) {
       case 'issues':
@@ -247,7 +248,7 @@ export default function App() {
     }
     content = (
       <RequireStaff path={path}>
-        <OrgShell active={section === 'sent' || query.get('tab') === 'city' ? 'sent' : section === 'experiments' ? 'reports' : section}>
+        <OrgShell active={section === 'sent' ? 'issues' : section === 'experiments' ? 'reports' : section}>
           {page}
         </OrgShell>
       </RequireStaff>

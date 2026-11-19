@@ -7,7 +7,7 @@ import type { Issue } from '../data/types';
 import { downloadText, toCsv } from '../lib/csv';
 import { EXPERIMENT_THRESHOLDS } from '../lib/experimentSettings';
 import { daysBetween, plural, shortDate, today } from '../lib/format';
-import { checkThreshold, monthLabel, monthOf, monthReport, reportMonths, shiftMonth, waitingByAgency } from '../lib/metrics';
+import { OPEN_LONG_DAYS, checkThreshold, monthLabel, monthOf, monthReport, reportMonths, shiftMonth, waitingByAgency } from '../lib/metrics';
 import { navigate } from '../router';
 import { useStore } from '../store';
 import { cityFigures } from './dashboard';
@@ -15,6 +15,8 @@ import { cityFigures } from './dashboard';
 const control = 'flex h-9 items-center justify-center gap-1.5 rounded-lg border px-3 text-sm';
 // Category bars are one neutral color: color means status.
 const bar = 'h-4 rounded bg-slate-400';
+// A section of the sheet. A document's sections are headings, not field labels.
+const heading = 'text-base font-semibold';
 // The sheet's side padding, and the margin that lets a band of it run edge to edge on screen.
 const gutter = 'px-5 md:px-8 print:px-3';
 const bleed = '-mx-5 md:-mx-8 print:mx-0';
@@ -69,55 +71,29 @@ export default function Reports({ month: wanted }: { month?: string | null }) {
     .flatMap((i) => i.updates.filter((u) => u.role === 'resident' && !u.mine && !u.hidden && monthOf(u.date) === month).map((u) => ({ u, i })))
     .slice(0, 2);
 
-  // The summary only states what the figures show.
-  const sentences: string[] = [];
-  if (r.pinned === 0) sentences.push(`No problems were pinned in ${name}${r.partial ? ' so far' : ''}.`);
-  else {
-    let s = `Residents pinned ${plural(r.pinned, 'problem')} in ${name}${r.partial ? ` up to ${shortDate(r.through)}` : ''}`;
-    if (r.partial) s += `, against ${r.pinnedPrev} in all of ${prevName}`;
-    else if (r.pinnedPrev > 0 || r.pinned > 0) {
-      const diff = r.pinned - r.pinnedPrev;
-      s += diff === 0 ? `, the same as in ${prevName}` : `, ${Math.abs(diff)} ${diff > 0 ? 'more' : 'fewer'} than in ${prevName}`;
-    }
-    sentences.push(`${s}.`);
-  }
-  if (r.fixed === 0) sentences.push(`No problems were marked fixed in ${name}${r.partial ? ' yet' : ''}.`);
-  else
-    sentences.push(
-      `Staff marked ${r.fixed} fixed, and residents confirmed ${r.confirmed === 0 ? 'none' : r.confirmed === r.fixed ? (r.fixed === 1 ? 'it' : 'all of them') : `${r.confirmed}`}${r.confirmed > 0 && r.confirmed < r.fixed ? ' of those fixes' : ''}${r.confirmed === 0 ? ' yet' : ''}.`,
-    );
-  if (r.topCategory && r.pinned > 1)
-    sentences.push(`${CATEGORIES[r.topCategory.category].label} was the most common category (${r.topCategory.pinned} of ${r.pinned}).`);
-  if (waiting || notFiled)
-    sentences.push(
-      [
-        waiting ? `Today ${plural(waiting, 'problem is', 'problems are')} waiting on the City` : '',
-        notFiled ? `${waiting ? `${notFiled} more` : `Today ${notFiled}`} ${notFiled === 1 ? 'names' : 'name'} a City agency but ${notFiled === 1 ? 'is' : 'are'} not filed with 311 yet` : '',
-      ]
-        .filter(Boolean)
-        .join('; ') + '.',
-    );
-
+  // A median of whole days is a whole number or a half.
+  const dayCount = (d: number) => (Number.isInteger(d) ? String(d) : d.toFixed(1));
   const figures: [label: string, value: string, note: string, tone?: string][] = [
     ['Problems pinned', String(r.pinned), r.partial ? `${r.pinnedPrev} in all of ${prevName}` : `${r.pinnedPrev} in ${prevName}`],
-    ['Fixed', String(r.fixed), `${r.confirmed} confirmed by residents`],
+    ['Fixed', String(r.fixed), r.fixed === 0 ? '' : `${r.confirmed === r.fixed ? (r.fixed === 1 ? 'confirmed' : 'all confirmed') : `${r.confirmed} confirmed`} by residents`],
     [
       'Median days to fix',
-      r.medianDaysToFix === null ? '—' : r.medianDaysToFix.toFixed(1),
-      r.medianDaysToFix === null ? 'nothing fixed this month' : fixTarget === null ? 'from pinned to marked fixed' : `target ${plural(fixTarget, 'day')}`,
+      r.medianDaysToFix === null ? '—' : dayCount(r.medianDaysToFix),
+      r.medianDaysToFix === null ? `nothing fixed${r.partial ? ' yet' : ''}` : fixTarget === null ? 'from pinned to marked fixed' : `target ${plural(fixTarget, 'day')}`,
       fixResult === 'misses' ? 'text-brand-dark' : undefined,
     ],
+    // The backlog, which the month's pins and fixes alone don't show.
     [
-      'Sent to the City',
-      String(r.sentToCity),
-      r.sentToCity === 0 ? 'no 311 requests this month' : r.sentStillWaiting === 0 ? 'none still waiting' : `${r.sentStillWaiting} still waiting`,
+      r.partial ? 'Still open today' : `Still open on ${shortDate(r.through)}`,
+      String(r.open),
+      r.open === 0 ? '' : r.openLong === 0 ? `none older than ${OPEN_LONG_DAYS} days` : `${r.openLong} older than ${OPEN_LONG_DAYS} days`,
     ],
   ];
 
-  const fixRows = r.byCategory.filter((c) => c.medianDaysToFix !== null);
-  const maxDays = Math.max(1, ...fixRows.map((c) => c.medianDaysToFix!), fixTarget ?? 0) * 1.1;
-  const pinRows = r.byCategory.filter((c) => c.pinned > 0);
-  const maxPins = Math.max(1, ...pinRows.map((c) => c.pinned));
+  // One row per category that had a pin or a fix, most pins first.
+  const rows = r.byCategory.filter((c) => c.pinned > 0 || c.fixed > 0).sort((a, b) => b.pinned - a.pinned);
+  const maxPins = Math.max(1, ...rows.map((c) => c.pinned));
+  const anyFixed = rows.some((c) => c.fixed > 0);
 
   return (
     <div className="pp-report mx-auto max-w-[1000px] space-y-5 px-4 py-5 md:px-8 md:py-7 print:p-0">
@@ -165,32 +141,27 @@ export default function Reports({ month: wanted }: { month?: string | null }) {
       </header>
 
       <article
-        className="rounded-xl border border-slate-200 bg-white p-5 md:p-8 print:border-0 print:p-0"
+        className="overflow-hidden rounded-xl border border-slate-200 bg-white p-5 md:p-8 print:overflow-visible print:border-0 print:p-0"
         style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}
       >
-        <p className={labelClass}>Summary</p>
-        <p className="mt-2 leading-relaxed md:text-lg">{sentences.join(' ')}</p>
-        {r.hidden > 0 && (
-          <p className="mt-2 text-sm text-slate-500">
-            {plural(r.hidden, 'pin')} that staff hid or the person who pinned {r.hidden === 1 ? 'it' : 'them'} removed {r.hidden === 1 ? 'is' : 'are'} left out of
-            these figures.
-          </p>
-        )}
-
-        <div className={`${bleed} mt-6 grid break-inside-avoid grid-cols-2 gap-px border-y border-slate-200 bg-slate-200 lg:grid-cols-4 print:grid-cols-4`}>
+        <div
+          className={`${bleed} -mt-5 grid break-inside-avoid grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 md:-mt-8 lg:grid-cols-4 print:mt-0 print:grid-cols-4 print:border-t`}
+        >
           {figures.map(([label, value, note, tone = 'text-slate-500']) => (
             <div key={label} className={`${gutter} bg-white py-4`}>
               <p className={labelClass}>{label}</p>
               <p className="mt-1 text-2xl font-bold tabular-nums md:text-3xl">{value}</p>
-              <p className={`mt-1 text-xs ${tone}`}>{note}</p>
+              <p className={`mt-1 min-h-4 text-xs ${tone}`}>{note}</p>
             </div>
           ))}
         </div>
 
         <section className="mt-6 md:mt-8">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h2 className={labelClass}>Waiting on the City, as of {shortDate(now)}</h2>
-            {listed > 0 && <p className="text-xs text-slate-500">Grouped by agency · longest wait first</p>}
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className={heading}>Waiting on the City</h2>
+            <p className="text-sm text-slate-500">
+              {[`as of ${shortDate(now)}`, waiting ? `${waiting} filed with 311` : '', notFiled ? `${notFiled} not filed yet` : ''].filter(Boolean).join(' · ')}
+            </p>
           </div>
           {listed === 0 ? (
             <p className="mt-2 text-sm text-slate-500">Nothing is waiting on the City.</p>
@@ -207,25 +178,27 @@ export default function Reports({ month: wanted }: { month?: string | null }) {
                     // Orange by the to-do list's rule: no contact with the City for `cityNoReplyDays` or more.
                     const late = req && daysBetween(req.lastFollowUp ?? req.sentOn, now) >= district.rules.cityNoReplyDays;
                     const tone = late ? 'text-brand-dark' : '';
+                    // The City's wait starts when the request is filed, so an unfiled one has none to show.
+                    const wait = req ? plural(days, 'day') : 'Not filed';
                     const facts = req
                       ? [
                           <span className="font-mono text-xs">SR {req.sr}</span>,
                           plural(i.votes, 'neighbor'),
                           `sent ${shortDate(req.sentOn)}, ${req.lastFollowUp ? `last follow-up ${shortDate(req.lastFollowUp)}` : 'no follow-up yet'}`,
                         ]
-                      : ['Not filed with 311 yet', plural(i.votes, 'neighbor'), `pinned ${shortDate(i.createdAt)}`];
+                      : [plural(i.votes, 'neighbor'), `pinned ${shortDate(i.createdAt)}`];
                     return (
                       <a
                         key={i.id}
                         href={`#/org/issues/${i.id}`}
-                        className={`${gutter} flex flex-col border-b border-slate-100 py-3 -outline-offset-2 hover:bg-slate-50 sm:flex-row sm:items-center sm:gap-4`}
+                        className={`${gutter} flex flex-col border-b border-slate-100 py-3 -outline-offset-2 hover:bg-slate-50 sm:flex-row sm:items-center sm:gap-4 print:py-2`}
                       >
                         <div className="min-w-0 flex-1">
                           <p>
                             <span className="mr-2 font-mono text-xs text-slate-500">{i.id}</span>
                             <span className="font-semibold">{i.title}</span>
                           </p>
-                          <p className={`text-sm font-semibold sm:hidden ${tone}`}>Waiting {plural(days, 'day')}</p>
+                          <p className={`text-sm font-semibold sm:hidden ${req ? tone : 'text-slate-500'}`}>{req ? `Waiting ${wait}` : 'Not filed with 311 yet'}</p>
                           <p className="mt-0.5 text-sm text-slate-500">
                             {facts.map((fact, n) => (
                               <Fragment key={n}>
@@ -237,7 +210,7 @@ export default function Reports({ month: wanted }: { month?: string | null }) {
                             ))}
                           </p>
                         </div>
-                        <p className={`hidden w-[72px] shrink-0 text-right text-sm font-semibold tabular-nums sm:block ${tone}`}>{plural(days, 'day')}</p>
+                        <p className={`hidden w-[72px] shrink-0 text-right text-sm tabular-nums sm:block ${req ? `font-semibold ${tone}` : 'text-slate-500'}`}>{wait}</p>
                       </a>
                     );
                   })}
@@ -248,68 +221,81 @@ export default function Reports({ month: wanted }: { month?: string | null }) {
         </section>
 
         <div className="mt-6 grid break-inside-avoid gap-8 md:mt-8 lg:grid-cols-[1fr_300px] lg:gap-10 print:grid-cols-[1fr_240px]">
-          <div className="space-y-6">
-            <div>
-              <p className={`${labelClass} mb-3`}>Pins by category</p>
-              {pinRows.length === 0 ? (
-                <p className="text-sm text-slate-500">No pins this month.</p>
-              ) : (
-                pinRows.map((c) => (
-                  <div key={c.category} className="mb-2 flex items-center gap-3 text-sm">
-                    <span className="w-28 shrink-0">{CATEGORIES[c.category].label}</span>
-                    <div className="h-4 flex-1">
-                      <div className={bar} style={{ width: `${(c.pinned / maxPins) * 100}%` }} />
-                    </div>
-                    <span className="w-20 shrink-0 tabular-nums">{c.pinned}</span>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div>
-              <p className={`${labelClass} mb-3`}>Median days to fix, by category</p>
-              {fixRows.length === 0 ? (
-                <p className="text-sm text-slate-500">Nothing was marked fixed in {name}, so there is no time to fix yet.</p>
-              ) : (
-                <>
-                  {fixRows.map((c) => (
-                    <div key={c.category} className="mb-2 flex items-center gap-3 text-sm">
-                      <span className="w-28 shrink-0">{CATEGORIES[c.category].label}</span>
-                      <div className="relative h-4 flex-1">
-                        <div className={bar} style={{ width: `${(c.medianDaysToFix! / maxDays) * 100}%` }} />
-                        {fixTarget !== null && (
-                          <div
-                            className="absolute -bottom-1.5 -top-1.5 border-l border-dashed border-slate-500"
-                            style={{ left: `${(fixTarget / maxDays) * 100}%` }}
-                          />
-                        )}
-                      </div>
-                      <span className="w-20 shrink-0 tabular-nums">
-                        {c.medianDaysToFix!.toFixed(1)} <span className="text-xs text-slate-500">n={c.fixed}</span>
-                      </span>
-                    </div>
+          <section>
+            <h2 className={heading}>By category</h2>
+            {rows.length === 0 ? (
+              <p className="mt-2 text-sm text-slate-500">No pins in {name}.</p>
+            ) : (
+              <table className="mt-2 w-full text-sm">
+                <thead>
+                  <tr className={`${labelClass} text-right [&>th]:pb-1.5 [&>th]:align-bottom [&>th]:font-medium`}>
+                    <th className="w-24 text-left sm:w-28">
+                      <span className="sr-only">Category</span>
+                    </th>
+                    <th className="text-left">Pinned</th>
+                    {anyFixed && (
+                      <>
+                        <th className="w-12 sm:w-14">Fixed</th>
+                        <th className="w-[4.5rem] sm:w-24">Median days</th>
+                      </>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((c) => (
+                    <tr key={c.category} className="[&>td]:py-1">
+                      <td>{CATEGORIES[c.category].label}</td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          {c.pinned > 0 && <div className={bar} style={{ width: `calc((100% - 2rem) * ${c.pinned / maxPins})` }} />}
+                          <span className="tabular-nums">{c.pinned}</span>
+                        </div>
+                      </td>
+                      {anyFixed && (
+                        <>
+                          <td className="text-right tabular-nums">{c.fixed || <span className="text-slate-500">–</span>}</td>
+                          <td
+                            className={`text-right tabular-nums ${checkThreshold(c.medianDaysToFix, EXPERIMENT_THRESHOLDS.daysToFix) === 'misses' ? 'font-semibold text-brand-dark' : ''}`}
+                          >
+                            {c.medianDaysToFix === null ? <span className="text-slate-500">–</span> : dayCount(c.medianDaysToFix)}
+                          </td>
+                        </>
+                      )}
+                    </tr>
                   ))}
-                  <p className="ml-[7.75rem] text-xs text-slate-500">
-                    {fixTarget !== null ? `dashed line = ${fixTarget}-day target · ` : ''}n = problems fixed this month
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
+                </tbody>
+              </table>
+            )}
+          </section>
 
-          <div>
-            <p className={`${labelClass} mb-3`}>In residents’ words</p>
-            {quotes.length === 0 && <p className="text-sm text-slate-500">No resident comments in {name}.</p>}
+          <section>
+            <h2 className={heading}>In residents’ words</h2>
+            {quotes.length === 0 && <p className="mt-2 text-sm text-slate-500">No resident comments in {name}.</p>}
             {quotes.map(({ u, i }) => (
-              <blockquote key={u.id} className="mb-4 border-l-2 border-slate-300 pl-3 text-sm last:mb-0">
+              <blockquote key={u.id} className="mt-3 border-l-2 border-slate-300 pl-3 text-sm">
                 “{u.text}”
                 <footer className="mt-1 text-xs text-slate-500">
-                  {u.author} · {shortDate(u.date)} · {plural(i.votes, 'neighbor')} on this issue
+                  <p>
+                    On{' '}
+                    <a href={`#/org/issues/${i.id}`} className={linkClass}>
+                      {i.title}
+                    </a>
+                  </p>
+                  <p>
+                    {shortDate(u.date)} · {plural(i.votes, 'neighbor')}
+                  </p>
                 </footer>
               </blockquote>
             ))}
-          </div>
+          </section>
         </div>
+
+        {r.hidden > 0 && (
+          <p className="mt-6 text-xs text-slate-500 md:mt-8">
+            {plural(r.hidden, 'pin')} that staff hid or the person who pinned {r.hidden === 1 ? 'it' : 'them'} removed {r.hidden === 1 ? 'is' : 'are'} left out of
+            these figures.
+          </p>
+        )}
       </article>
 
       {isDemo && (

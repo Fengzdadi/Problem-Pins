@@ -92,6 +92,20 @@ describe('monthReport', () => {
     expect(r).toMatchObject({ pinned: 0, fixed: 0, medianDaysToFix: null, topCategory: null, partial: true, through: '2026-10-14' });
   });
 
+  it('counts what was still open on the last day of the month', () => {
+    const backlog = [
+      issue({ id: 'A', createdAt: '2026-08-10' }), // open, 51 days old on Sep 30
+      issue({ id: 'B', createdAt: '2026-09-20', status: 'in_review' }),
+      issue({ id: 'C', createdAt: '2026-08-01', status: 'fixed', fixedOn: '2026-09-12' }), // fixed in the month
+      issue({ id: 'D', createdAt: '2026-08-05', status: 'fixed', fixedOn: '2026-10-03' }), // fixed after it: still open then
+      issue({ id: 'E', createdAt: '2026-10-02' }), // pinned after it
+      issue({ id: 'F', createdAt: '2026-09-01', hidden: true }),
+      issue({ id: 'G', createdAt: '2026-09-01', mergedInto: 'B' }),
+    ];
+    expect(monthReport(backlog, '2026-09', '2026-10-14', ['litter'])).toMatchObject({ open: 3, openLong: 2 }); // A, B, D; A and D over 30 days
+    expect(monthReport(backlog, '2026-10', '2026-10-14', ['litter'])).toMatchObject({ open: 3, openLong: 1 }); // A, B, E; only A
+  });
+
   it('counts 311 requests by the month they were filed, and how many still wait', () => {
     const req = (sentOn: string) => ({ sr: '311-1', agency: 'NYC DOT', routedTo: '', sentOn });
     const sent = [

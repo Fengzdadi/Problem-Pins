@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowRight, Check, Copy, QrCode } from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, Copy, QrCode } from 'lucide-react';
 import { CATEGORY_ICONS, SampleBadge, labelClass, linkClass } from '../components/ui';
 import { config } from '../config';
 import { CATEGORIES } from '../data/meta';
@@ -107,6 +107,7 @@ function Figures({ events }: { events: AnalyticsEvent[] | null }) {
       <Figure
         label="Waiting on the City"
         value={city.count}
+        href={city.count ? '#/org/issues?tab=city' : undefined}
         note={city.count ? city.byAgency.map((a) => `${a.agency} ${a.count}`).join(' · ') : 'Nothing with the City right now'}
       />
       <Figure
@@ -124,13 +125,25 @@ function Figures({ events }: { events: AnalyticsEvent[] | null }) {
  * on purpose: this card is the one place that shows how things stand at a glance. Nothing here is
  * a link; the sidebar already leads to each of these.
  */
-function Figure({ label, value, note, tone = 'text-slate-500' }: { label: string; value: ReactNode; note: string; tone?: string }) {
-  return (
-    <div className="bg-white px-4 py-3.5 md:px-5 md:py-4">
-      <p className={labelClass}>{label}</p>
+/** One figure. With `href` the whole figure is a link to the list behind it, marked by the arrow. */
+function Figure({ label, value, note, tone = 'text-slate-500', href }: { label: string; value: ReactNode; note: string; tone?: string; href?: string }) {
+  const box = 'block bg-white px-4 py-3.5 md:px-5 md:py-4';
+  const body = (
+    <>
+      <p className={`${labelClass} flex items-center justify-between gap-2`}>
+        {label}
+        {href && <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />}
+      </p>
       <p className="mt-1 text-2xl font-bold tabular-nums md:text-3xl">{value}</p>
       <p className={`mt-1 text-xs ${tone}`}>{note}</p>
-    </div>
+    </>
+  );
+  return href ? (
+    <a href={href} className={`${box} -outline-offset-2 hover:bg-slate-50`}>
+      {body}
+    </a>
+  ) : (
+    <div className={box}>{body}</div>
   );
 }
 
